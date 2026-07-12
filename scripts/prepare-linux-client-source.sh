@@ -17,8 +17,19 @@ find "$output_dir" -type f \( -name '*.h' -o -name '*.cpp' \) -exec \
     -e 's/([[:space:]])static class /\1class /g' \
     -e 's/^([[:space:]]*)extern (struct|union) /\1\2 /g' {} +
 
-if ! grep -q '^#include <cmath>$' "$output_dir/InterpolationFunctions.cpp"; then
-  sed -i '1i#include <cmath>' "$output_dir/InterpolationFunctions.cpp"
-fi
+# GCC does not make C math functions available implicitly like the original
+# MSVC build did. Add the standard header to the generated translation units
+# that use them and qualify the remaining unqualified tangent call.
+for cpp in InterpolationFunctions.cpp CharacterClasses.cpp; do
+  if ! grep -q '^#include <cmath>$' "$output_dir/$cpp"; then
+    sed -i '1i#include <cmath>' "$output_dir/$cpp"
+  fi
+done
+sed -i -E 's/(^|[^[:alnum:]_:])tan\(/\1std::tan(/g' "$output_dir/CharacterClasses.cpp"
+
+# These are legal but noisy remnants of the old Windows project. Clean them
+# only in the generated Linux copy so GCC output highlights real failures.
+find "$output_dir" -type f -name '*.cpp' -exec sed -i '/^[[:space:]]*#pragma once[[:space:]]*$/d' {} +
+sed -i 's/return NULL;/return 0;/g' "$output_dir/Scanner.cpp"
 
 echo "Prepared GCC-compatible Linux client sources at $output_dir"
