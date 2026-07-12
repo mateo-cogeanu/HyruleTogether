@@ -1872,12 +1872,13 @@ void Main::mainServerLoop()
 
         std::vector<int> ConnectedPlayers = {};
 
-        for (auto const& player : serverResponse->ClosePlayers)
-        {
+		for (auto const& player : serverResponse->ClosePlayers)
+		{
             if (player->PlayerNumber + 1 == 32 && Main::HidePlayer32)
                 continue;
 
-            Instances::PlayerList[player->PlayerNumber + 1]->set(player, serverResponse->NetworkData->DisplayNames, Game::GameInstance->IsGamePaused);
+			Instances::PlayerList[player->PlayerNumber + 1]->LowLatency = ping < 40.0f;
+			Instances::PlayerList[player->PlayerNumber + 1]->set(player, serverResponse->NetworkData->DisplayNames, Game::GameInstance->IsGamePaused);
             ConnectedPlayers.push_back(player->PlayerNumber + 1);
 
             if (serverResponse->PropHuntData->Phase == 2 && player->Health == 0)
@@ -1893,8 +1894,9 @@ void Main::mainServerLoop()
             }
         }
 
-        for (auto const& player : serverResponse->FarPlayers)
-        {
+		for (auto const& player : serverResponse->FarPlayers)
+		{
+			Instances::PlayerList[player->PlayerNumber + 1]->LowLatency = ping < 40.0f;
             Instances::PlayerList[player->PlayerNumber + 1]->set(player, serverResponse->NetworkData->DisplayNames, Game::GameInstance->IsGamePaused);
             ConnectedPlayers.push_back(player->PlayerNumber + 1);
         }

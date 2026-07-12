@@ -21,6 +21,8 @@ namespace MemoryAccess
 		DWORD LastUpdated = 0;
 		DWORD LastAttack = 0;
 		int LastAnimation = 0;
+		bool LowLatency = false;
+		BigEndian<int>* AnimationState = new BigEndian<int>();
 		int ChargeAttackRetries = 0;
 
 		Vec3f Speed = Vec3f(0, 0, 0);
@@ -79,6 +81,10 @@ namespace MemoryAccess
 		{
 			Mutex.lock();
 			Actor::setAddress(addr);
+			if (addr != 0)
+				AnimationState = new BigEndian<int>(addr, { 0x448, 0x4C, 0x10, 0x19C, 0x38, 0xA0, 0x10, -0x5C }, 0x10, "Player::setAddress::Animation");
+			else
+				AnimationState = new BigEndian<int>();
 			Mutex.unlock();
 		}
 
@@ -169,6 +175,8 @@ namespace MemoryAccess
 				}
 			}
 			
+			if (AnimationState != nullptr && PlayerData->Animation != LastAnimation)
+				AnimationState->set(PlayerData->Animation, __FUNCTION__);
 			LastAnimation = PlayerData->Animation;
 
 			if (HoldAddr != 0)

@@ -175,8 +175,9 @@ void Player::PThread()
 				continue;
 			}
 
-			//TODO: Bring targetFPS
-			this->Teleport(Helper::Extrapolation::Next(this->Position->LastKnown, this->Speed, (1000 / 60 - FunctionTime) / 1000)); //Substracting FunctionTime to be as close to 60 fps as posible.
+			const float updateRate = this->LowLatency ? 120.0f : 60.0f;
+			const float frameTime = 1000.0f / updateRate;
+			this->Teleport(Helper::Extrapolation::Next(this->Position->LastKnown, this->Speed, (frameTime - FunctionTime) / 1000.0f));
 			this->Bomb->reset();
 			this->Bomb2->reset();
 			this->BombCube->reset();
@@ -184,8 +185,8 @@ void Player::PThread()
 
 			FunctionTime = float(GetTickCount() - TimerStart);
 
-			if (1000 / 60 - FunctionTime > 0)
-				Sleep(1000 / 60 - FunctionTime);
+			if (frameTime - FunctionTime > 0)
+				Sleep(static_cast<DWORD>(frameTime - FunctionTime));
 		}
 		catch (const std::exception& ex)
 		{

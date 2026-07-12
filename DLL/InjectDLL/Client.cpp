@@ -27,6 +27,8 @@ bool Client::connectToServer(std::string IP, std::string PORT)
             continue;
         if (::connect(candidate, address->ai_addr, static_cast<int>(address->ai_addrlen)) == 0)
         {
+			int noDelay = 1;
+			setsockopt(candidate, IPPROTO_TCP, TCP_NODELAY, reinterpret_cast<const char*>(&noDelay), sizeof(noDelay));
             server = candidate;
             break;
         }

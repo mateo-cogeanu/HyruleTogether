@@ -100,6 +100,8 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 - Core position, state, player-name, connection, server, and actor synchronization can proceed when optional cosmetic flags are unavailable.
 - Added the success log `Scanned core game flags successfully.` for this compatibility mode.
 - Activated the existing remote equipment application path: received weapon, shield, bow, head, upper-body, and lower-body IDs are now applied when a remote actor spawns and whenever its equipment packet changes.
+- Restored native animation synchronization by resolving each remote actor's animation-state pointer directly and applying changed animation hashes without relying on unavailable legacy UKMM string flags.
+- Added a sub-40 ms low-latency movement mode with TCP packet coalescing disabled on clients and servers plus 120 Hz remote extrapolation; higher-latency sessions retain the stable 60 Hz path.
 
 ### Player model and game-data preparation
 

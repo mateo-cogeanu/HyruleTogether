@@ -108,6 +108,7 @@ namespace BOTWM.Server
                 try
                 {
                     Socket connection = listen!.Accept();
+                    connection.NoDelay = true;
                     var clientThread = new Thread(() => handleClient(connection)) { IsBackground = true };
                     lock (clientThreadsLock)
                     {
