@@ -2,11 +2,14 @@
 using BOTW.Logging;
 
 DedicatedServer? dedicatedServer = null;
+string? pidFile = Environment.GetEnvironmentVariable("HYRULE_SERVER_PID_FILE");
 try
 {
+	if (!string.IsNullOrWhiteSpace(pidFile))
+		File.WriteAllText(pidFile, Environment.ProcessId.ToString());
     Console.WriteLine("***************************************************************");
     Console.WriteLine("*                                                             *");
-    Console.WriteLine("*             Milk Bar Launcher Dedicated Server              *");
+    Console.WriteLine("*              Hyrule Together Dedicated Server               *");
     Console.WriteLine("*                                                             *");
     Console.WriteLine("***************************************************************\n");
 
@@ -64,4 +67,8 @@ catch (Exception e)
 finally
 {
     dedicatedServer?.Shutdown();
+	if (!string.IsNullOrWhiteSpace(pidFile))
+	{
+		try { File.Delete(pidFile); } catch { }
+	}
 }

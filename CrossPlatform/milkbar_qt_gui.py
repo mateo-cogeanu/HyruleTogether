@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
+import signal
 import socket
 import sys
 import time
@@ -235,8 +237,9 @@ class MilkBarWindow(QMainWindow):
         self.selected_server = 0
         self.process: QProcess | None = None
         self.server_process: QProcess | None = None
+        self.server_pid: int | None = None
         self.graphics_process: QProcess | None = None
-        self.setWindowTitle("Breath of the Wild Multiplayer")
+        self.setWindowTitle("Hyrule Together")
         if APP_ICON:
             self.setWindowIcon(QIcon(str(APP_ICON)))
         self.setFixedSize(WIDTH, HEIGHT)
@@ -729,10 +732,8 @@ class MilkBarWindow(QMainWindow):
         return ROOT / "Build" / "server" / rid / "MBL.DedicatedServer"
 
     def toggle_host_server(self) -> None:
-        if self.server_process and self.server_process.state() != QProcess.ProcessState.NotRunning:
-            self.server_process.terminate()
-            if not self.server_process.waitForFinished(3000):
-                self.server_process.kill()
+        if self.host_server_running():
+            self.stop_host_server()
             return
 
         dialog = HostServerDialog(self, self.config.get("host_server"))
@@ -760,21 +761,49 @@ class MilkBarWindow(QMainWindow):
             f"KorokSync={enabled}\nTowerSync={enabled}\nShrineSync={enabled}\nLocationSync={enabled}\n"
             f"DungeonSync={enabled}\nSpecial=0\n", encoding="utf-8")
 
-        self.server_process = QProcess(self)
-        self.server_process.setProgram(str(executable))
-        self.server_process.setArguments(["--config", str(config_path), "--non-interactive"])
-        self.server_process.setWorkingDirectory(str(server_dir))
-        environment = QProcessEnvironment.systemEnvironment()
-        environment.insert("MILKBAR_DATA_DIR", str(backend.data_directory()))
-        environment.insert("MILKBAR_SERVER_LOG_DIR", str(server_dir))
-        self.server_process.setProcessEnvironment(environment)
-        self.server_process.setProcessChannelMode(QProcess.ProcessChannelMode.MergedChannels)
-        self.server_process.readyReadStandardOutput.connect(self.server_output)
-        self.server_process.finished.connect(self.server_finished)
-        self.server_process.start()
-        if not self.server_process.waitForStarted(5000):
-            QMessageBox.critical(self, "Hyrule Together Server", self.server_process.errorString())
+        pid_file = server_dir / "server.pid"
+        pid_file.unlink(missing_ok=True)
+        command_file = server_dir / "Start Hyrule Together Server.command"
+        command_file.write_text(
+            "#!/usr/bin/env bash\n"
+            f"export MILKBAR_DATA_DIR={shlex.quote(str(backend.data_directory()))}\n"
+            f"export MILKBAR_SERVER_LOG_DIR={shlex.quote(str(server_dir))}\n"
+            f"export HYRULE_SERVER_PID_FILE={shlex.quote(str(pid_file))}\n"
+            f"cd {shlex.quote(str(server_dir))}\n"
+            f"exec {shlex.quote(str(executable))} --config {shlex.quote(str(config_path))}\n",
+            encoding="utf-8")
+        command_file.chmod(0o755)
+
+        launched = False
+        if sys.platform == "darwin":
+            launched, _ = QProcess.startDetached("open", ["-a", "Terminal", str(command_file)], str(server_dir))
+        else:
+            terminals = (
+                ("x-terminal-emulator", ["-e", str(command_file)]),
+                ("gnome-terminal", ["--", str(command_file)]),
+                ("konsole", ["-e", str(command_file)]),
+                ("xfce4-terminal", ["--execute", str(command_file)]),
+                ("xterm", ["-e", str(command_file)]),
+            )
+            for terminal, arguments in terminals:
+                if shutil.which(terminal):
+                    launched, _ = QProcess.startDetached(terminal, arguments, str(server_dir))
+                    if launched:
+                        break
+        if not launched:
+            QMessageBox.critical(self, "Hyrule Together Server",
+                                 "No supported terminal application was found.")
             return False
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline and not pid_file.exists():
+            QApplication.processEvents()
+            time.sleep(0.05)
+        if not pid_file.exists():
+            QMessageBox.critical(self, "Hyrule Together Server",
+                                 "The interactive server terminal opened, but the server did not start.")
+            return False
+        self.server_pid = int(pid_file.read_text(encoding="utf-8").strip())
         self.host_button.setText("Stop Server")
         local_entry = {"name": values["name"], "host": "127.0.0.1", "port": values["port"],
                        "password": values["password"], "description": values["description"], "mode": "Hosted"}
@@ -790,6 +819,25 @@ class MilkBarWindow(QMainWindow):
         backend.save_config(self.config)
         self.populate_servers()
         return True
+
+    def host_server_running(self) -> bool:
+        if not self.server_pid:
+            return False
+        try:
+            os.kill(self.server_pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            self.server_pid = None
+            return False
+
+    def stop_host_server(self) -> None:
+        if self.server_pid:
+            try:
+                os.kill(self.server_pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
+        self.server_pid = None
+        self.host_button.setText("Host Server")
 
     def server_output(self) -> None:
         if not self.server_process:
@@ -809,8 +857,7 @@ class MilkBarWindow(QMainWindow):
             return
         server = servers[self.selected_server]
         if (server.get("mode") == "Hosted" and server.get("host") in ("127.0.0.1", "localhost")
-                and (not self.server_process or
-                     self.server_process.state() == QProcess.ProcessState.NotRunning)):
+                and not self.host_server_running()):
             values = dict(self.config.get("host_server") or {})
             values.update(name=server.get("name", "My Hyrule"), port=int(server["port"]),
                           password=server.get("password", ""),
@@ -823,7 +870,7 @@ class MilkBarWindow(QMainWindow):
             deadline = time.monotonic() + 5.0
             while time.monotonic() < deadline:
                 QApplication.processEvents()
-                if self.server_process.state() == QProcess.ProcessState.NotRunning:
+                if not self.host_server_running():
                     QMessageBox.critical(self, "Hyrule Together Server",
                                          "The hosted server stopped before Cemu could connect.")
                     return
@@ -876,9 +923,8 @@ class MilkBarWindow(QMainWindow):
         super().resizeEvent(event)
 
     def closeEvent(self, event) -> None:
-        if self.server_process and self.server_process.state() != QProcess.ProcessState.NotRunning:
-            self.server_process.terminate()
-            self.server_process.waitForFinished(2500)
+        if self.host_server_running():
+            self.stop_host_server()
         super().closeEvent(event)
 
 

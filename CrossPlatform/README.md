@@ -90,8 +90,10 @@ macOS/Linux title bar and can also be opened with
 `./CrossPlatform/milkbar_launcher.py gui`.
 
 The Lobby Browser's **Host Server** action configures and starts the dedicated
-server, adds its loopback address to the server list, streams server status into
-the launcher, and shuts the server down with the launcher. The server supports
+server in an interactive system terminal, adds its loopback address to the
+server list, and shuts the server down with the launcher. The terminal shows
+live player join/leave activity and accepts the complete dedicated-server
+command set (`help` lists the available commands). The server supports
 IPv4, IPv6, and hostnames; handles fragmented TCP frames; and stores its shared
 mapping data in the same platform data directory as the launcher and client.
 For a standalone host, run the executable produced under `Build/server/<rid>`

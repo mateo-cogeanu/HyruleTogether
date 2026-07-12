@@ -132,6 +132,7 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 - Automatically adds a newly hosted loopback server to the server list.
 - Streams server startup and failure status back into the launcher.
 - Keeps the server alive for the Cemu session and shuts it down with the launcher.
+- GUI-hosted servers now open in a real interactive macOS/Linux terminal, showing live join/leave logs and accepting every dedicated-server console command; a PID-file handshake preserves launcher readiness checks and managed shutdown.
 - Supports connecting native clients across the target platforms through the shared network protocol.
 
 ### Diagnostics and stability work
