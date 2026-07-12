@@ -174,6 +174,11 @@ namespace MemoryAccess
 			if (HoldAddr != 0)
 				Memory::write_string(HoldAddr, PlayerData->IsEquipped ? "Hold" : "Equip", 6, __FUNCTION__);
 			this->Equipment->Changed = Equipment->Compare(PlayerData->Equipment);
+			if (this->Equipment->Changed && this->baseAddr != 0)
+			{
+				this->Equipment->SetWeapons(this->baseAddr);
+				this->Equipment->SetArmor();
+			}
 			AtkUp = PlayerData->AtkUp;
 			Health = PlayerData->Health;
 

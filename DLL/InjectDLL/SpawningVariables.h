@@ -381,6 +381,7 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 
 		Instances::PlayerList[spawnedPlayer]->setAddress(hCPU->gpr[3]);
 		Instances::PlayerList[spawnedPlayer]->Equipment->SetWeapons(hCPU->gpr[3]);
+		Instances::PlayerList[spawnedPlayer]->Equipment->SetArmor();
 		Instances::PlayerList[spawnedPlayer]->Bumii->setAddress(hCPU->gpr[3]);
 
 		Logging::LoggerService::LogDebug("Player " + std::to_string(spawnedPlayer) + " setup correctly.", __FUNCTION__);

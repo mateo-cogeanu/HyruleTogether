@@ -99,6 +99,7 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 - Added guarded writes for every optional address.
 - Core position, state, player-name, connection, server, and actor synchronization can proceed when optional cosmetic flags are unavailable.
 - Added the success log `Scanned core game flags successfully.` for this compatibility mode.
+- Activated the existing remote equipment application path: received weapon, shield, bow, head, upper-body, and lower-body IDs are now applied when a remote actor spawns and whenever its equipment packet changes.
 
 ### Player model and game-data preparation
 
