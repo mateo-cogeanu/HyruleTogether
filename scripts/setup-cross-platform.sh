@@ -9,5 +9,5 @@ python3 -m venv "$root/.venv"
 "$root/scripts/build-server.sh"
 
 echo
-echo "Milk Bar is ready. Start the GUI with:"
+echo "Hyrule Together is ready. Start the GUI with:"
 echo "  $root/scripts/run-gui.sh"

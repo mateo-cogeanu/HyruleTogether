@@ -25,6 +25,7 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 - Added code signing of development macOS bundles and ZIP packaging through `ditto`.
 - Added native component build scripts for the client, server, model builder, UKMM tool, and patched Cemu.
 - Added setup and launcher scripts for development use.
+- Made `build-bundled-launcher.sh` fully self-bootstrapping: it now creates the local Python virtual environment and installs all packaging requirements before building, eliminating the separate setup command for distributable builds.
 
 ### Native launcher and setup experience
 

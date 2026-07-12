@@ -8,7 +8,9 @@ native `.dylib`/`.so`.
 ## Complete bundled builds
 
 The distributable launcher is compiled for exactly one platform target. That
-target is not a user-facing setting:
+target is not a user-facing setting. This single command also creates the
+Python environment, installs packaging dependencies, and builds all native and
+server components, so `setup-cross-platform.sh` is not required first:
 
 ```sh
 ./scripts/build-bundled-launcher.sh mac_x86_64
@@ -57,7 +59,8 @@ The setup script installs a private .NET 8 SDK only when one is not already
 available, then publishes a self-contained server; players do not need a
 system-wide .NET installation to host.
 
-To prepare a development checkout and run the GUI without packaging:
+To prepare a development checkout and run the GUI without packaging, the
+standalone setup helper remains available:
 
 ```sh
 ./scripts/setup-cross-platform.sh

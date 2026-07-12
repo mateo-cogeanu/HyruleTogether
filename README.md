@@ -30,7 +30,10 @@ This repository contains the projects needed to build Hyrule Together.
 # Building the project
 Building the project should not be too complicated and this process can be automated using the [python script](buildWPF.py).
 
-Build the complete launcher for the current machine with one of these targets:
+Build the complete launcher for the current machine with one of these targets.
+The script creates its Python environment, installs packaging dependencies, and
+builds every required component automatically; no separate setup command is
+required:
 
 ```sh
 ./scripts/build-bundled-launcher.sh mac_x86_64

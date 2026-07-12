@@ -21,7 +21,13 @@ if [[ "$host_os" != "$expected_os" || "$host_arch" != "$expected_arch" ]]; then
 fi
 
 python="$root/.venv/bin/python"
-[[ -x "$python" ]] || { echo "Run scripts/setup-cross-platform.sh first." >&2; exit 1; }
+if [[ ! -x "$python" ]]; then
+  echo "Creating the Hyrule Together build environment..."
+  python3 -m venv "$root/.venv"
+fi
+"$python" -m pip install --upgrade pip
+"$python" -m pip install -r "$root/CrossPlatform/requirements.txt"
+
 packager="portable-python"
 if "$python" -m PyInstaller --version >/dev/null 2>&1; then
   packager="pyinstaller"
