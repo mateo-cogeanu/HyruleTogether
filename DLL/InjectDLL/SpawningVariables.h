@@ -72,6 +72,10 @@
 
 		int fnAddr;
 
+		// patch_SpawnActors.asm aligns the following .int fields to four
+		// bytes after its two one-byte flags.  Because this native structure
+		// is stored in reverse order, those implicit PPC bytes live here.
+		byte bytepadding[2];
 		bool interceptRegisters;
 
 		bool enabled;
@@ -83,13 +87,15 @@
 	};
 #pragma pack(pop)
 
-// The PPC graphic-pack storage is exactly 42 bytes. memory_writeMemoryBE()
-// reverses this complete structure, so even one padding byte moves every
-// function/register field to the wrong emulated address.
-static_assert(sizeof(TransferableData) == 42, "Spawn transfer layout must match patch_SpawnActors.asm");
+// The PPC assembler aligns FunctionToJump to four bytes after Enabled and
+// InterceptRegisters, making the graphic-pack storage exactly 44 bytes.
+// memory_writeMemoryBE() reverses this complete structure, so the native
+// representation must retain the corresponding two padding bytes.
+static_assert(sizeof(TransferableData) == 44, "Spawn transfer layout must match patch_SpawnActors.asm");
 static_assert(offsetof(TransferableData, fnAddr) == 36, "Spawn function address offset changed");
-static_assert(offsetof(TransferableData, interceptRegisters) == 40, "Spawn intercept flag offset changed");
-static_assert(offsetof(TransferableData, enabled) == 41, "Spawn enabled flag offset changed");
+static_assert(offsetof(TransferableData, bytepadding) == 40, "Spawn alignment padding changed");
+static_assert(offsetof(TransferableData, interceptRegisters) == 42, "Spawn intercept flag offset changed");
+static_assert(offsetof(TransferableData, enabled) == 43, "Spawn enabled flag offset changed");
 static_assert(sizeof(InstanceData) == 256, "Spawn instance ring entry must remain 256 bytes");
 
 	extern struct QueueActor {
@@ -289,18 +295,32 @@ void mainFn(PPCInterpreter_t* hCPU, uint32_t startTrnsData, uint32_t startRingBu
 	// Get our transferrable data
 	TransferableData trnsData;
 	memInstance->memory_readMemoryBE(startTrnsData, &trnsData, baseAddress);
-
-	// Get our instance data
-	uint32_t startInstData = trnsData.ringPtr;
-	InstanceData instData;
-	memInstance->memory_readMemoryBE(startInstData, &instData, baseAddress);
 	data_mutex.unlock_shared(); //==================================================================
-
+	const bool invalidRingRange = startRingBuffer >= endRingBuffer ||
+		static_cast<uint64_t>(endRingBuffer) - startRingBuffer < sizeof(InstanceData);
+	const bool invalidRingPointer = !invalidRingRange &&
+		(trnsData.ringPtr < static_cast<int>(startRingBuffer) ||
+		 static_cast<uint64_t>(static_cast<uint32_t>(trnsData.ringPtr)) + sizeof(InstanceData) > endRingBuffer ||
+		 (static_cast<uint32_t>(trnsData.ringPtr) - startRingBuffer) % sizeof(InstanceData) != 0);
+	if (invalidRingRange || invalidRingPointer) {
+		Logging::LoggerService::LogError(
+			"Rejected invalid spawn ring layout (start=" + std::to_string(startRingBuffer) +
+			", end=" + std::to_string(endRingBuffer) +
+			", pointer=" + std::to_string(trnsData.ringPtr) + ").",
+			__FUNCTION__);
+		if (invalidRingRange)
+			return;
+		trnsData.ringPtr = startRingBuffer;
+	}
 	trnsData.interceptRegisters = true; // Just make sure to intercept stuff.. if we don't do this all the time when you warp somewhere else spawns cause it to crash
 
 	queue_mutex.lock(); ////////////////////////////////////////////
 	// Actual actor spawning - just read from queue here.
 	if (queuedActors.size() >= 1) {
+		InstanceData instData;
+		data_mutex.lock_shared();
+		memInstance->memory_readMemoryBE(static_cast<uint32_t>(trnsData.ringPtr), &instData, baseAddress);
+		data_mutex.unlock_shared();
 		setupActor(hCPU, trnsData, instData, startRingBuffer, endRingBuffer, baseAddress);
 	}
 	queue_mutex.unlock(); //========================================
