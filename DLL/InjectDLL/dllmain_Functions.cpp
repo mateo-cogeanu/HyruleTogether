@@ -18,6 +18,18 @@ bool isCharacterSpawn = false;
 std::vector<bool> WeaponChanged = { false, false, false, false };
 static std::string connectionError;
 
+static int GetRemoteActorSlot(int serverPlayerNumber)
+{
+    // Server player numbers include this client, while Jugador actor slots
+    // contain only remote players. Compact the IDs around the local slot so
+    // the first remote player is always Jugador1 on every client.
+    if (serverPlayerNumber == Main::playerNumber)
+        return 32;
+    return serverPlayerNumber < Main::playerNumber
+        ? serverPlayerNumber + 1
+        : serverPlayerNumber;
+}
+
 const std::string& Main::getConnectionError()
 {
     return connectionError;
@@ -1890,7 +1902,7 @@ void Main::mainServerLoop()
         }
 
         for (auto const& pair : serverResponse->NameData->Names)
-            Instances::PlayerList[pair.first + 1]->Name = pair.second;
+            Instances::PlayerList[GetRemoteActorSlot(pair.first)]->Name = pair.second;
 
         for (auto const& pair : serverResponse->ModelData->Models)
         {
@@ -1908,15 +1920,16 @@ void Main::mainServerLoop()
             }
             else
             {
-                Instances::PlayerList[pair.first + 1]->Model = pair.second;
-                Instances::PlayerList[pair.first + 1]->Equipment->Changed = true;
+                const int actorSlot = GetRemoteActorSlot(pair.first);
+                Instances::PlayerList[actorSlot]->Model = pair.second;
+                Instances::PlayerList[actorSlot]->Equipment->Changed = true;
 
                 if (pair.second.ModelType != 2)
                 {
-                    Instances::PlayerList[pair.first + 1]->Model.Bumii.ffsd.no_use_ffsd = 1;
+                    Instances::PlayerList[actorSlot]->Model.Bumii.ffsd.no_use_ffsd = 1;
                 }
 
-                Instances::PlayerList[pair.first + 1]->Bumii->Initialize(Instances::PlayerList[pair.first + 1]->Model.Bumii);
+                Instances::PlayerList[actorSlot]->Bumii->Initialize(Instances::PlayerList[actorSlot]->Model.Bumii);
             }
         }
 
@@ -1924,31 +1937,33 @@ void Main::mainServerLoop()
 
 		for (auto const& player : serverResponse->ClosePlayers)
 		{
-            if (player->PlayerNumber + 1 == 32 && Main::HidePlayer32)
+            const int actorSlot = GetRemoteActorSlot(player->PlayerNumber);
+            if (actorSlot == 32 && Main::HidePlayer32)
                 continue;
 
-			Instances::PlayerList[player->PlayerNumber + 1]->LowLatency = ping < 40.0f;
-			Instances::PlayerList[player->PlayerNumber + 1]->set(player, serverResponse->NetworkData->DisplayNames, Game::GameInstance->IsGamePaused);
-            ConnectedPlayers.push_back(player->PlayerNumber + 1);
+			Instances::PlayerList[actorSlot]->LowLatency = ping < 40.0f;
+			Instances::PlayerList[actorSlot]->set(player, serverResponse->NetworkData->DisplayNames, Game::GameInstance->IsGamePaused);
+            ConnectedPlayers.push_back(actorSlot);
 
             if (serverResponse->PropHuntData->Phase == 2 && player->Health == 0)
             {
-                if (std::find(Main::FoundPlayers.begin(), Main::FoundPlayers.end(), player->PlayerNumber + 1) != Main::FoundPlayers.end())
+                if (std::find(Main::FoundPlayers.begin(), Main::FoundPlayers.end(), actorSlot) != Main::FoundPlayers.end())
                 {
                     continue;
                 }
 
-                Logging::LoggerService::LogInformation(Instances::PlayerList[player->PlayerNumber + 1]->Name + " was found.", __FUNCTION__);
-                Memory::MessagerService::AddMessage(Instances::PlayerList[player->PlayerNumber + 1]->Name + " was found.");
-                Main::FoundPlayers.push_back(player->PlayerNumber + 1);
+                Logging::LoggerService::LogInformation(Instances::PlayerList[actorSlot]->Name + " was found.", __FUNCTION__);
+                Memory::MessagerService::AddMessage(Instances::PlayerList[actorSlot]->Name + " was found.");
+                Main::FoundPlayers.push_back(actorSlot);
             }
         }
 
 		for (auto const& player : serverResponse->FarPlayers)
 		{
-			Instances::PlayerList[player->PlayerNumber + 1]->LowLatency = ping < 40.0f;
-            Instances::PlayerList[player->PlayerNumber + 1]->set(player, serverResponse->NetworkData->DisplayNames, Game::GameInstance->IsGamePaused);
-            ConnectedPlayers.push_back(player->PlayerNumber + 1);
+			const int actorSlot = GetRemoteActorSlot(player->PlayerNumber);
+			Instances::PlayerList[actorSlot]->LowLatency = ping < 40.0f;
+            Instances::PlayerList[actorSlot]->set(player, serverResponse->NetworkData->DisplayNames, Game::GameInstance->IsGamePaused);
+            ConnectedPlayers.push_back(actorSlot);
         }
 
         for (int i = 1; i < 33; i++)
