@@ -1545,12 +1545,21 @@ void Main::oldServerLoop()
 
 bool Main::CheckIfPaused()
 {
+#ifndef _WIN32
+    const DWORD heartbeat = Main::SpawnHookHeartbeat.load(std::memory_order_relaxed);
+    // The spawning hook runs continuously while the world actor update is
+    // active and stops while menus/loading pause that path.  Treat startup and
+    // a missed half-second of callbacks as paused; PauseChecker already waits
+    // another second before declaring the game unpaused.
+    return heartbeat == 0 || static_cast<DWORD>(GetTickCount() - heartbeat) > 500;
+#else
     //Memory::write_byte(notPaused, 0x00, __FUNCTION__);
     Game::GameInstance->NotPaused->set(0, __FUNCTION__);
 
     Sleep(300);
 
     return !Game::GameInstance->NotPaused->get(__FUNCTION__);
+#endif
 
     //return Memory::read_bytes(notPaused, 1, __FUNCTION__)[0] == 0x0 ? true : false;
 }

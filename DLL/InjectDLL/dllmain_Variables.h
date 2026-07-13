@@ -1,6 +1,7 @@
 #pragma once
 
 #define _WINSOCKAPI_
+#include <atomic>
 #include <vector>
 #include "Platform.h"
 #include <string>
@@ -74,5 +75,6 @@ namespace Main
 	extern std::vector<std::string> questServerSettings;
 
 	extern bool isPaused;
+	extern std::atomic<DWORD> SpawnHookHeartbeat;
 
 }

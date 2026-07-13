@@ -304,6 +304,10 @@ void mainFn(PPCInterpreter_t* hCPU, uint32_t startTrnsData, uint32_t startRingBu
 void mainFn(PPCInterpreter_t* hCPU) {
 
 	hCPU->instructionPointer = hCPU->sprNew.LR; // Tell it where to return to - REQUIRED
+	// This callback is reached from the game's actor update path.  On Unix it
+	// provides a pause-safe heartbeat without relying on the legacy BCML event
+	// flow that continuously rewrote the custom notPaused game-data flag.
+	Main::SpawnHookHeartbeat.store(GetTickCount(), std::memory_order_relaxed);
 	mainFn(hCPU, hCPU->gpr[3], hCPU->gpr[4], hCPU->gpr[5], Main::baseAddr);
 }
 

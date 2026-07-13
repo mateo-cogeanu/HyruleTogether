@@ -72,6 +72,7 @@ int Main::GlyphDistance = 250;
 std::vector<std::string> Main::questServerSettings;
 
 bool Main::isPaused = true;
+std::atomic<DWORD> Main::SpawnHookHeartbeat{0};
 
 std::vector<float> Main::oldLocations[] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 0, 0}};
 
