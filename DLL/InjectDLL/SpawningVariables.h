@@ -72,7 +72,7 @@
 		int ringPtr;
 
 		int fnAddr;
-		int dispatchReserved;
+		int dispatchState;
 
 		// patch_SpawnActors.asm aligns the following .int fields to four
 		// bytes after its two one-byte flags.  Because this native structure
@@ -89,13 +89,13 @@
 	};
 #pragma pack(pop)
 
-// The PPC assembler aligns SpawnDispatchReserved to four bytes after Enabled
-// and InterceptRegisters. With that reserved transfer word the storage is 48
+// The PPC assembler aligns SpawnDispatchState to four bytes after Enabled and
+// InterceptRegisters. With that dispatch word the storage is 48
 // bytes. memory_writeMemoryBE() reverses this complete structure, so the
 // native representation must retain the corresponding two padding bytes.
 static_assert(sizeof(TransferableData) == 48, "Spawn transfer layout must match patch_SpawnActors.asm");
 static_assert(offsetof(TransferableData, fnAddr) == 36, "Spawn function address offset changed");
-static_assert(offsetof(TransferableData, dispatchReserved) == 40, "Spawn reserved-word offset changed");
+static_assert(offsetof(TransferableData, dispatchState) == 40, "Spawn dispatch-state offset changed");
 static_assert(offsetof(TransferableData, bytepadding) == 44, "Spawn alignment padding changed");
 static_assert(offsetof(TransferableData, interceptRegisters) == 46, "Spawn intercept flag offset changed");
 static_assert(offsetof(TransferableData, enabled) == 47, "Spawn enabled flag offset changed");
@@ -273,7 +273,10 @@ void setupActor(PPCInterpreter_t* hCPU, TransferableData& trnsData, InstanceData
 	hCPU->gpr[9] = trnsData.f_r9;
 	hCPU->gpr[10] = trnsData.f_r10;
 	trnsData.fnAddr = 0x037b6040; // Address to call to
-	trnsData.dispatchReserved = 0;
+	// The PPC wrappers atomically change Ready to Claimed so exactly one core
+	// dispatches this actor. The winning wrapper clears the state only after the
+	// actor-factory call returns.
+	trnsData.dispatchState = 1;
 
 	trnsData.enabled = true; // This tells the assembly patch to trigger one function call
 	Logging::LoggerService::LogDebug("Submitted actor " + qAct.Name + " to BOTW's spawn function.", __FUNCTION__);

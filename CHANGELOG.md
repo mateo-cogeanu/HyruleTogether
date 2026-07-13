@@ -98,6 +98,8 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ### Multiplayer startup and resilience
 
+- Made remote-player actor spawning a single-consumer PPC transaction. The three emulated cores now atomically claim each queued spawn, and the request remains blocked until the winning actor-factory call returns, preventing Linux from racing duplicate calls and silently failing to create the other player.
+
 - Replaced the broken macOS/Linux `notPaused` game-data polling dependency with a heartbeat from the native per-frame actor hook. UKMM retained the legacy flag but did not refresh it, causing both connected clients to remain permanently "paused" and reject every remote-player creation request; normal gameplay can now spawn remote actors while menus and loading states remain guarded.
 - Added the in-game quest-log notification `Server sync started!` after Link is discovered and the synchronization scan begins.
 - Added explicit logging when the notification is written successfully.
