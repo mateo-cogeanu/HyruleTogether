@@ -16,6 +16,12 @@ std::vector<uint64_t> activatedAddr;
 uint64_t notPaused;
 bool isCharacterSpawn = false;
 std::vector<bool> WeaponChanged = { false, false, false, false };
+static std::string connectionError;
+
+const std::string& Main::getConnectionError()
+{
+    return connectionError;
+}
 
 void Main::PrepareGameInstance()
 {
@@ -25,6 +31,7 @@ void Main::PrepareGameInstance()
 
 bool Main::connectToServer(std::string serverMessage)
 {
+    connectionError.clear();
     int startingPosition = 0;
     int count = 1;
 
@@ -94,7 +101,10 @@ bool Main::connectToServer(std::string serverMessage)
     }
 
     if (!client->connectToServer(IP, PORT))
+    {
+        connectionError = "Could not reach the server at " + IP + ":" + PORT;
         return false;
+    }
 
     byte ConnectBytes[7168];
     Serialization::Serializer::SerializeConnectData(&ConnectBytes[0], NAME, PASSWORD, MODELTYPE, MODELDATA);
@@ -102,15 +112,28 @@ bool Main::connectToServer(std::string serverMessage)
     //Serialization::Serializer::CopyToArray(&ConnectBytes[0]);
 
     if (!client->sendBytes(ConnectBytes))
+    {
+        connectionError = "The connection request could not be sent";
         return false;
+    }
 
     serverData = client->receive();
     if (serverData.empty())
+    {
+        connectionError = "The server closed the connection without a response";
         return false;
+    }
 
-    std::cout << serverData << std::endl;
+    Logging::LoggerService::LogInformation("Received server handshake response");
 
     rapidjson::Document serverDoc = Connectivity::deserializeServerData(serverData);
+
+    if (!serverDoc.IsObject() || !serverDoc.HasMember("Response") || !serverDoc["Response"].IsInt())
+    {
+        connectionError = "The server returned an invalid handshake response";
+        Logging::LoggerService::LogError(connectionError, __FUNCTION__);
+        return false;
+    }
 
     if (serverDoc["Response"].GetInt() == 1)
     {
@@ -163,6 +186,18 @@ bool Main::connectToServer(std::string serverMessage)
         }
         return true;
     }
+
+    const int responseCode = serverDoc["Response"].GetInt();
+    if (serverDoc.HasMember("Reason") && serverDoc["Reason"].IsString() && serverDoc["Reason"].GetStringLength() > 0)
+        connectionError = serverDoc["Reason"].GetString();
+    else if (responseCode == 2)
+        connectionError = "The server is full";
+    else if (responseCode == 3)
+        connectionError = "Incorrect server password";
+    else
+        connectionError = "The server rejected the connection (code " + std::to_string(responseCode) + ")";
+
+    Logging::LoggerService::LogError(connectionError, __FUNCTION__);
 
     return false;
 }

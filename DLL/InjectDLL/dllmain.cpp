@@ -123,7 +123,7 @@ void readInstruction()
             if (response)
                 Logging::LoggerService::LogInformation("Connected to server successfully");
             else
-                Logging::LoggerService::LogError("Server rejected the connection request", __FUNCTION__);
+                Logging::LoggerService::LogError("Server connection failed: " + Main::getConnectionError(), __FUNCTION__);
         }
         else if (instruction.find("!startServerLoop") != std::string::npos)
         {
@@ -140,9 +140,11 @@ void readInstruction()
             }
         }
 
-        const char* reply = response ? "Succeeded" : "Failed";
+        std::string reply = response ? "Succeeded" : "Failed";
+        if (!response && instruction.find("!connect") != std::string::npos && !Main::getConnectionError().empty())
+            reply += ": " + Main::getConnectionError();
         DWORD written = 0;
-        if (!WriteFile(namedPipe->hPipe, reply, static_cast<DWORD>(std::strlen(reply) + 1), &written, nullptr)) {
+        if (!WriteFile(namedPipe->hPipe, reply.c_str(), static_cast<DWORD>(reply.size() + 1), &written, nullptr)) {
             Logging::LoggerService::LogError("Launcher IPC closed before the instruction reply was delivered", __FUNCTION__);
             return;
         }

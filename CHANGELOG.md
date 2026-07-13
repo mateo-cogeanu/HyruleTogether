@@ -145,6 +145,8 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ### Diagnostics and stability work
 
+- Fixed misleading post-handshake "crashes": server connection rejections now preserve their protocol reason, log whether the server is full, the password is incorrect, the server is unreachable, or its response is malformed, and return that explanation through launcher IPC instead of reporting a generic native-client failure.
+- Added human-readable rejection reasons to the cross-platform dedicated server handshake while retaining the existing numeric response codes for compatibility with original clients.
 - Fixed a native startup race exposed by fast macOS title loading: the Time Manager HLE callback could run before launcher IPC created `Game::GameInstance`, causing a native null dereference reported at the DynamicBranch PPC return address `0x01808994`. The local instance is now created before Cemu resumes title startup, preserved through multiplayer setup, and all world/actor/bomb callbacks defensively ignore events until their state exists.
 - Hardened Unix launcher IPC after a post-connect native termination with no Cemu or macOS stack trace: acknowledgements now send only their actual length, command buffers are initialized and parsed using the received byte count, read/write failures are logged, Linux uses `MSG_NOSIGNAL`, and macOS enables `SO_NOSIGPIPE` so a closed launcher socket cannot terminate Cemu.
 - Started native-client logging at preload time instead of after HLE hook installation, ensuring bootstrap failures always produce `LatestLog.txt`.
@@ -160,6 +162,7 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ### Documentation and build hygiene
 
+- Fixed `build-server.sh` on the Bash 3 version bundled with macOS, where expanding an empty restore-options array under `set -u` aborted the build before `dotnet publish` started.
 - Added cross-platform build, development, packaging, configuration, hosting, and runtime documentation.
 - Documented target-specific build requirements and output locations.
 - Documented the private application-data layout and why its legacy name is retained.

@@ -24,11 +24,15 @@ else
 fi
 
 output="$root/Build/server/$rid"
-restore_args=()
+restore_arg=""
 if [[ "${MILKBAR_DOTNET_NO_RESTORE:-0}" == "1" ]]; then
-  restore_args+=(--no-restore)
+  restore_arg="--no-restore"
 fi
-"$dotnet" publish "$root/C#/BOTW.DedicatedServer/BOTWM.DedicatedServer.csproj" "${restore_args[@]}" \
+publish_args=(publish "$root/C#/BOTW.DedicatedServer/BOTWM.DedicatedServer.csproj")
+if [[ -n "$restore_arg" ]]; then
+  publish_args+=("$restore_arg")
+fi
+"$dotnet" "${publish_args[@]}" \
   -c Release -r "$rid" --self-contained true \
   -p:PublishSingleFile=true -p:DebugType=None -p:DebugSymbols=false \
   -o "$output"

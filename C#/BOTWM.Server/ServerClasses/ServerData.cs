@@ -275,7 +275,7 @@ namespace BOTWM.Server.ServerClasses
         static public ConnectResponseDTO TryAssigning(ConnectDTO UserConfiguration)
         {
             if (Configuration.PASSWORD != "" && Configuration.PASSWORD != UserConfiguration.Password)
-                return new ConnectResponseDTO() { Response = 3 };
+                return new ConnectResponseDTO() { Response = 3, Reason = "Incorrect server password" };
 
             DataMutex.WaitOne(100);
 
@@ -299,7 +299,7 @@ namespace BOTWM.Server.ServerClasses
             DataMutex.ReleaseMutex();
 
             if (playerNumber == -1)
-                return new ConnectResponseDTO() { Response = 2 };
+                return new ConnectResponseDTO() { Response = 2, Reason = "The server is full" };
 
             NameData.AddName((byte)playerNumber, UserConfiguration.Name);
             ModelData.AddModel((byte)playerNumber, UserConfiguration.ModelData);

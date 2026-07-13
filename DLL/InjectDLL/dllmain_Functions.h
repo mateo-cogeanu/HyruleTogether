@@ -7,6 +7,7 @@ namespace Main
 {
 
 	bool connectToServer(std::string serverMessage);
+	const std::string& getConnectionError();
 	void disconnectFromServer(std::string reason);
 	void playerQueueUpdate();
 	void HelperThread();
