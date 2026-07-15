@@ -1,5 +1,24 @@
 #include "Memory.h"
+#include <array>
+#include <cstdint>
 #include <iostream>
+#include <limits>
+
+namespace
+{
+    void SetPointerFailure(std::string* failureReason, const std::string& reason)
+    {
+        if (failureReason != nullptr)
+            *failureReason = reason;
+    }
+
+    std::string HexAddress(uint64_t address)
+    {
+        std::stringstream stream;
+        stream << "0x" << std::hex << address;
+        return stream.str();
+    }
+}
 
 uint64_t Memory::getBaseAddress()
 {
@@ -376,4 +395,120 @@ uint64_t Memory::ReadPointers(uint64_t InitialAddress, std::vector<int> readingO
     }
 
     return response + (IncludeBaseAddress ? getBaseAddress() : 0);
+}
+
+bool Memory::TryReadBigEndian4BytesOffset(uint64_t Offset, uint32_t& Value, std::string* FailureReason)
+{
+    Value = 0;
+
+    // Wii U pointers are unsigned 32-bit emulated addresses. The legacy reader
+    // returns int, which sign-extends pointers at or above 0x80000000 when they
+    // are assigned to uint64_t and can turn the next link into a host SIGSEGV.
+    constexpr uint64_t PPC_ADDRESS_MAX = std::numeric_limits<uint32_t>::max();
+    if (Offset > PPC_ADDRESS_MAX - sizeof(uint32_t) + 1)
+    {
+        SetPointerFailure(FailureReason, "PPC read offset " + HexAddress(Offset) + " is outside the 32-bit address space");
+        return false;
+    }
+
+    const uint64_t memoryBase = getBaseAddress();
+    if (memoryBase == 0 || memoryBase > std::numeric_limits<uintptr_t>::max() - Offset)
+    {
+        SetPointerFailure(FailureReason, "Cemu emulated-memory base is unavailable");
+        return false;
+    }
+
+    const uintptr_t hostAddress = static_cast<uintptr_t>(memoryBase + Offset);
+    MEMORY_BASIC_INFORMATION memoryInfo{};
+    const DWORD rejectedProtection = PAGE_GUARD | PAGE_NOCACHE | PAGE_NOACCESS;
+    if (VirtualQuery(reinterpret_cast<LPCVOID>(hostAddress), &memoryInfo, sizeof(memoryInfo)) == 0 ||
+        !(memoryInfo.State & MEM_COMMIT) || (memoryInfo.Protect & rejectedProtection))
+    {
+        SetPointerFailure(FailureReason, "PPC read offset " + HexAddress(Offset) + " is not backed by readable host memory");
+        return false;
+    }
+
+    const uintptr_t regionStart = reinterpret_cast<uintptr_t>(memoryInfo.BaseAddress);
+    if (hostAddress < regionStart || memoryInfo.RegionSize < sizeof(uint32_t) ||
+        hostAddress - regionStart > memoryInfo.RegionSize - sizeof(uint32_t))
+    {
+        SetPointerFailure(FailureReason, "PPC read offset " + HexAddress(Offset) + " crosses a host memory-region boundary");
+        return false;
+    }
+
+    std::array<uint8_t, sizeof(uint32_t)> bytes{};
+    memcpy(bytes.data(), reinterpret_cast<const void*>(hostAddress), bytes.size());
+    Value = (static_cast<uint32_t>(bytes[0]) << 24) |
+        (static_cast<uint32_t>(bytes[1]) << 16) |
+        (static_cast<uint32_t>(bytes[2]) << 8) |
+        static_cast<uint32_t>(bytes[3]);
+    return true;
+}
+
+bool Memory::TryReadPointers(uint64_t InitialAddress, const std::vector<int>& readingOffsets, uint64_t& Result,
+    bool IncludeBaseAddress, std::string* FailureReason)
+{
+    Result = 0;
+    uint64_t response = InitialAddress;
+
+    for (size_t i = 0; i < readingOffsets.size(); ++i)
+    {
+        const int64_t signedOffset = readingOffsets[i];
+        uint64_t readOffset = response;
+        if (signedOffset < 0)
+        {
+            const uint64_t magnitude = static_cast<uint64_t>(-signedOffset);
+            if (readOffset < magnitude)
+            {
+                SetPointerFailure(FailureReason, "pointer link " + std::to_string(i) + " underflowed its signed offset");
+                return false;
+            }
+            readOffset -= magnitude;
+        }
+        else
+        {
+            const uint64_t magnitude = static_cast<uint64_t>(signedOffset);
+            if (readOffset > std::numeric_limits<uint64_t>::max() - magnitude)
+            {
+                SetPointerFailure(FailureReason, "pointer link " + std::to_string(i) + " overflowed its signed offset");
+                return false;
+            }
+            readOffset += magnitude;
+        }
+
+        uint32_t pointerValue = 0;
+        std::string readFailure;
+        if (!TryReadBigEndian4BytesOffset(readOffset, pointerValue, FailureReason == nullptr ? nullptr : &readFailure))
+        {
+            if (FailureReason != nullptr)
+                *FailureReason = "pointer link " + std::to_string(i) + " failed: " + readFailure;
+            return false;
+        }
+        if (pointerValue == 0)
+        {
+            SetPointerFailure(FailureReason,
+                "pointer link " + std::to_string(i) + " is null after reading " + HexAddress(readOffset));
+            return false;
+        }
+
+        // Preserve the pointer's unsigned PPC ABI value instead of sign
+        // extending it through the legacy int return type.
+        response = static_cast<uint64_t>(pointerValue);
+    }
+
+    if (IncludeBaseAddress)
+    {
+        const uint64_t memoryBase = getBaseAddress();
+        if (memoryBase == 0 || memoryBase > std::numeric_limits<uint64_t>::max() - response)
+        {
+            SetPointerFailure(FailureReason, "resolved pointer cannot be converted to a host address");
+            return false;
+        }
+        response += memoryBase;
+    }
+
+    Result = response;
+    if (FailureReason != nullptr)
+        FailureReason->clear();
+    return true;
 }

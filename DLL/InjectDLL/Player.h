@@ -1,5 +1,7 @@
 #pragma once
 
+#include <atomic>
+#include <limits>
 #include <mutex>
 
 #include "Actor.h"
@@ -54,7 +56,7 @@ namespace MemoryAccess
 		MemoryAccess::LocalInstance* GameInstance;
 
 		std::thread pThread;
-		bool RunThread = false;
+		std::atomic<bool> RunThread{ false };
 
 		enum ActionEnum
 		{
@@ -322,9 +324,22 @@ namespace MemoryAccess
 			UpdateMapPin(Vec3f(0, 0, 0), false);
 			//this->Delete->set(true, __FUNCTION__);
 			this->Status->set(1, __FUNCTION__);
+			this->RunThread.store(false, std::memory_order_release);
+			if (pThread.joinable())
+				pThread.join();
 			setAddress(0);
-			this->RunThread = false;
-			pThread.join();
+		}
+
+		void StopForTitleShutdown()
+		{
+			// Cemu has already published that emulated memory is entering
+			// teardown. Stop and join the worker without writing despawn flags
+			// into the title, then clear host-side pointers only.
+			connected = false;
+			this->RunThread.store(false, std::memory_order_release);
+			if (pThread.joinable())
+				pThread.join();
+			setAddress(0);
 		}
 
 		void UpdateName(bool DispNames)
@@ -362,21 +377,36 @@ namespace MemoryAccess
 				return false;
 			LastAnimationResolveAttempt = now;
 
-			const uint64_t animationRoot = Memory::ReadPointers(
-				this->baseAddr, { 0x448, 0x4C, 0x10, 0x19C, 0x38, 0xA0, 0x10, -0x5C }, true);
-			const uint64_t animationAddress = animationRoot == 0 ? 0 : animationRoot + 0x10;
-			if (animationAddress < 30000)
+			uint64_t animationRoot = 0;
+			std::string failureReason;
+			const bool resolved = Memory::TryReadPointers(
+				this->baseAddr, { 0x448, 0x4C, 0x10, 0x19C, 0x38, 0xA0, 0x10, -0x5C },
+				animationRoot, false, &failureReason);
+			constexpr uint64_t ANIMATION_STATE_OFFSET = 0x10;
+			uint32_t currentAnimation = 0;
+			bool animationReadable = false;
+			if (resolved)
+			{
+				if (animationRoot > std::numeric_limits<uint32_t>::max() - ANIMATION_STATE_OFFSET)
+					failureReason = "animation-state offset exceeds the 32-bit PPC address space";
+				else
+					animationReadable = Memory::TryReadBigEndian4BytesOffset(
+						animationRoot + ANIMATION_STATE_OFFSET, currentAnimation, &failureReason);
+			}
+			if (!animationReadable)
 			{
 				if (!AnimationWaitLogged)
 				{
 					Logging::LoggerService::LogWarning(
-						"Remote animation state is not ready; retrying while position synchronization continues.",
+						"Remote animation state is not ready (" + failureReason +
+						"); retrying while position synchronization continues.",
 						"Player::ResolveAnimationState");
 					AnimationWaitLogged = true;
 				}
 				return false;
 			}
 
+			const uint64_t animationAddress = Memory::getBaseAddress() + animationRoot + ANIMATION_STATE_OFFSET;
 			AnimationState = new BigEndian<int>(animationAddress, "Player::ResolveAnimationState");
 			AnimationApplied = false;
 			std::stringstream stream;

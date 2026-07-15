@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 #include "Platform.h"
 #include <string>
@@ -54,6 +55,9 @@ namespace Memory
     std::string extractLocName(uint64_t Addr, int bytes = 50);
     bool CompareSignatures(std::vector<BYTE> First, std::vector<BYTE> Second, std::vector<int> WildCards = {  } );
     uint64_t ReadPointers(uint64_t InitialAddress, std::vector<int> readingOffsets, bool IncludeBaseAddress = false);
+    bool TryReadBigEndian4BytesOffset(uint64_t Offset, uint32_t& Value, std::string* FailureReason = nullptr);
+    bool TryReadPointers(uint64_t InitialAddress, const std::vector<int>& readingOffsets, uint64_t& Result,
+        bool IncludeBaseAddress = false, std::string* FailureReason = nullptr);
     void ValidateAddress(uint64_t address);
 
 

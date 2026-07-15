@@ -2,6 +2,11 @@
 
 using namespace MemoryAccess;
 
+namespace Main
+{
+	bool IsCemuTitleActive();
+}
+
 void Player::PThread()
 {
 	float FunctionTime = 0; // In milliseconds
@@ -13,7 +18,7 @@ void Player::PThread()
 	startStream << "Player " << this->PlayerNumber << " thread starting...";
 	Logging::LoggerService::LogInformation(startStream.str(), __FUNCTION__);
 
-	while (RunThread)
+	while (RunThread.load(std::memory_order_acquire) && Main::IsCemuTitleActive())
 	{
 		try 
 		{
@@ -73,8 +78,11 @@ void Player::PThread()
 				//this->Delete->set(true, __FUNCTION__);
 				this->Status->set(1, __FUNCTION__);
 
-				while (this->baseAddr != 0)
+				while (RunThread.load(std::memory_order_acquire) &&
+					Main::IsCemuTitleActive() && this->baseAddr != 0)
 					Sleep(50);
+				if (!RunThread.load(std::memory_order_acquire) || !Main::IsCemuTitleActive())
+					break;
 
 				//this->Delete->set(false, __FUNCTION__);
 				this->Status->set(0, __FUNCTION__);
@@ -105,7 +113,8 @@ void Player::PThread()
 
 				DWORD deleteTime = GetTickCount();
 
-				while (this->baseAddr != 0 || GameInstance->IsPaused())
+				while (RunThread.load(std::memory_order_acquire) && Main::IsCemuTitleActive() &&
+					(this->baseAddr != 0 || GameInstance->IsPaused()))
 				{
 					if (GameInstance->IsPaused())
 						deleteTime = GetTickCount();
@@ -125,6 +134,8 @@ void Player::PThread()
 
 					Sleep(100);
 				}
+				if (!RunThread.load(std::memory_order_acquire) || !Main::IsCemuTitleActive())
+					break;
 
 				//this->Delete->set(false, __FUNCTION__);
 				this->Status->set(0, __FUNCTION__);
@@ -169,6 +180,9 @@ void Player::PThread()
 				continue;
 			}
 
+			if (!Main::IsCemuTitleActive())
+				break;
+
 			if (this->baseAddr == 0)
 			{
 				Sleep(100);
@@ -201,6 +215,7 @@ void Player::PThread()
 			exit(1);
 		}
 	}
+	RunThread.store(false, std::memory_order_release);
 
 	std::stringstream endStream;
 	endStream << "Player " << this->PlayerNumber << " thread stopping...";

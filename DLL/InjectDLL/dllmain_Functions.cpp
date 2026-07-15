@@ -30,6 +30,17 @@ static int GetRemoteActorSlot(int serverPlayerNumber)
         : serverPlayerNumber;
 }
 
+static void StopPlayersForTitleShutdown()
+{
+    for (const auto& player : Instances::PlayerList)
+    {
+        if (player.second != nullptr)
+            player.second->StopForTitleShutdown();
+    }
+    Logging::LoggerService::LogInformation(
+        "Stopped remote player workers for BOTW title shutdown.", "mainServerLoop");
+}
+
 const std::string& Main::getConnectionError()
 {
     return connectionError;
@@ -1755,6 +1766,7 @@ void Main::mainServerLoop()
         {
             Logging::LoggerService::LogInformation(
                 "BOTW title stopped; ending multiplayer without terminating Cemu.", __FUNCTION__);
+            StopPlayersForTitleShutdown();
             client->close();
             return;
         }
@@ -1792,6 +1804,7 @@ void Main::mainServerLoop()
         {
             Logging::LoggerService::LogInformation(
                 "BOTW title stopped during server receive; ending multiplayer without terminating Cemu.", __FUNCTION__);
+            StopPlayersForTitleShutdown();
             client->close();
             return;
         }
@@ -2012,10 +2025,14 @@ void Main::mainServerLoop()
 DWORD __stdcall Main::ShowConnectionMessage(LPVOID)
 {
     Sleep(10000);
+    if (!Main::IsCemuTitleActive())
+        return 0;
     Memory::MessagerService::StartMessagerService();
     Memory::MessagerService::AddMessage("Server sync started!");
     for (int attempt = 0; attempt < 20; ++attempt)
     {
+        if (!Main::IsCemuTitleActive())
+            return 0;
         Memory::MessagerService::DisplayMessage();
         Sleep(500);
     }
