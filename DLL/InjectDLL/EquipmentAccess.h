@@ -19,6 +19,47 @@ namespace DataTypes
 			PlayerNumber = playerNumber;
 		}
 
+		bool ResolveFactoryResource(
+			const std::string& placeholder,
+			std::string& resource,
+			std::string& slot)
+		{
+			std::unique_lock<std::shared_mutex> lock(Mutex);
+			const std::string playerPrefix = "Jugador" + std::to_string(PlayerNumber);
+			if (placeholder == playerPrefix + "RightHandWeaponLongName")
+			{
+				slot = "melee";
+				resource = BuildMeleeResource();
+			}
+			else if (placeholder == playerPrefix + "LeftHandWeaponLongName")
+			{
+				slot = "shield";
+				if (LastKnown->Shield != 0)
+					resource = "Weapon_Shield_" + NumToStr(LastKnown->Shield);
+			}
+			else if (placeholder == playerPrefix + "BowWeaponLongName")
+			{
+				slot = "bow";
+				if (LastKnown->Bow != 0)
+					resource = "Weapon_Bow_" + NumToStr(LastKnown->Bow);
+			}
+			else
+			{
+				return false;
+			}
+
+			FactoryResolutionObserved = true;
+			return true;
+		}
+
+		bool ConsumeFactoryResolution()
+		{
+			std::unique_lock<std::shared_mutex> lock(Mutex);
+			const bool observed = FactoryResolutionObserved;
+			FactoryResolutionObserved = false;
+			return observed;
+		}
+
 		bool Compare(CharacterEquipment newEquipment)
 		{
 			std::unique_lock<std::shared_mutex> lock(Mutex);
@@ -85,46 +126,26 @@ namespace DataTypes
 			std::unique_lock<std::shared_mutex> lock(Mutex);
 
 			FindWeaponAddr(baseAddr);
-			RemoveActorLocalTemplateAddresses();
-			FindWeaponTemplateAddrs(RIGHT_DEFAULT, LEFT_DEFAULT, BOW_DEFAULT);
 
 			uint64_t OldAddress = ArmorAddrs.Face;
 
 			FindArmorAddr(baseAddr);
 
-			std::string RightHandWeapon;
+			std::string RightHandWeapon = BuildMeleeResource();
 			std::string LeftHandWeapon;
 			std::string BowWeapon;
 
-			if (LastKnown->Sword != 0)
-			{
-				switch (LastKnown->WType)
-				{
-				case 1:
-					RightHandWeapon = "Weapon_Sword_" + NumToStr(LastKnown->Sword);
-					break;
-				case 2:
-					RightHandWeapon = "Weapon_Lsword_" + NumToStr(LastKnown->Sword);
-					break;
-				case 3:
-					RightHandWeapon = "Weapon_Spear_" + NumToStr(LastKnown->Sword);
-					break;
-				}
-			}
 			if (LastKnown->Shield != 0)
 				LeftHandWeapon = "Weapon_Shield_" + NumToStr(LastKnown->Shield);
 			if (LastKnown->Bow != 0)
 				BowWeapon = "Weapon_Bow_" + NumToStr(LastKnown->Bow);
 
-			WriteWeaponResource(
-				WeaponTemplateAddrs.Right, WeaponAddrs.Right,
-				RightHandWeapon, RIGHT_DEFAULT.size() + 1);
-			WriteWeaponResource(
-				WeaponTemplateAddrs.Left, WeaponAddrs.Left,
-				LeftHandWeapon, LEFT_DEFAULT.size() + 1);
-			WriteWeaponResource(
-				WeaponTemplateAddrs.Bow, WeaponAddrs.Bow,
-				BowWeapon, BOW_DEFAULT.size() + 1);
+			WriteActorWeaponResource(
+				"melee", WeaponAddrs.Right, RightHandWeapon, RIGHT_DEFAULT.size() + 1);
+			WriteActorWeaponResource(
+				"shield", WeaponAddrs.Left, LeftHandWeapon, LEFT_DEFAULT.size() + 1);
+			WriteActorWeaponResource(
+				"bow", WeaponAddrs.Bow, BowWeapon, BOW_DEFAULT.size() + 1);
 			Logging::LoggerService::LogInformation(
 				"Equipment setup: weapon=" + (RightHandWeapon.empty() ? "none" : RightHandWeapon) +
 				", shield=" + (LeftHandWeapon.empty() ? "none" : LeftHandWeapon) +
@@ -317,26 +338,23 @@ namespace DataTypes
 
 	private:
 		std::shared_mutex Mutex;
-		bool WeaponTemplateScanComplete = false;
+		bool FactoryResolutionObserved = false;
 
-		bool IsActorLocalWeaponAddress(uint64_t address) const
+		std::string BuildMeleeResource()
 		{
-			return address != 0 &&
-				(address == WeaponAddrs.Right || address == WeaponAddrs.Left || address == WeaponAddrs.Bow);
-		}
-
-		void RemoveActorLocalTemplateAddresses()
-		{
-			auto removeActorAddress = [this](std::vector<uint64_t>& addresses) {
-				addresses.erase(
-					std::remove_if(
-						addresses.begin(), addresses.end(),
-						[this](uint64_t address) { return IsActorLocalWeaponAddress(address); }),
-					addresses.end());
-			};
-			removeActorAddress(WeaponTemplateAddrs.Right);
-			removeActorAddress(WeaponTemplateAddrs.Left);
-			removeActorAddress(WeaponTemplateAddrs.Bow);
+			if (LastKnown->Sword == 0)
+				return "";
+			switch (LastKnown->WType)
+			{
+			case 1:
+				return "Weapon_Sword_" + NumToStr(LastKnown->Sword);
+			case 2:
+				return "Weapon_Lsword_" + NumToStr(LastKnown->Sword);
+			case 3:
+				return "Weapon_Spear_" + NumToStr(LastKnown->Sword);
+			default:
+				return "";
+			}
 		}
 
 		bool IsMappedWriteRange(uint64_t address, size_t capacity) const
@@ -361,77 +379,31 @@ namespace DataTypes
 				address - regionStart <= memoryInfo.RegionSize - capacity;
 		}
 
-		void FindWeaponTemplateAddrs(
-			const std::string& rightPlaceholder,
-			const std::string& leftPlaceholder,
-			const std::string& bowPlaceholder)
-		{
-			if (WeaponTemplateScanComplete || PlayerNumber <= 0)
-				return;
-
-			const std::string prefix = "Jugador" + std::to_string(PlayerNumber);
-			std::vector<int> signature(prefix.begin(), prefix.end());
-			for (uint64_t address : Memory::PatternScanMultiple(
-				signature, Memory::getBaseAddress(), 8, 0, false, 0, 0))
-			{
-				if (IsActorLocalWeaponAddress(address))
-					continue;
-				std::string value = Memory::read_string(address, 64, __FUNCTION__);
-				if (value == rightPlaceholder &&
-					std::find(WeaponTemplateAddrs.Right.begin(), WeaponTemplateAddrs.Right.end(), address) ==
-						WeaponTemplateAddrs.Right.end())
-					WeaponTemplateAddrs.Right.push_back(address);
-				else if (value == leftPlaceholder &&
-					std::find(WeaponTemplateAddrs.Left.begin(), WeaponTemplateAddrs.Left.end(), address) ==
-						WeaponTemplateAddrs.Left.end())
-					WeaponTemplateAddrs.Left.push_back(address);
-				else if (value == bowPlaceholder &&
-					std::find(WeaponTemplateAddrs.Bow.begin(), WeaponTemplateAddrs.Bow.end(), address) ==
-						WeaponTemplateAddrs.Bow.end())
-					WeaponTemplateAddrs.Bow.push_back(address);
-			}
-			WeaponTemplateScanComplete =
-				!WeaponTemplateAddrs.Right.empty() &&
-				!WeaponTemplateAddrs.Left.empty() &&
-				!WeaponTemplateAddrs.Bow.empty();
-
-			Logging::LoggerService::LogInformation(
-				"Resolved player " + std::to_string(PlayerNumber) +
-				" persistent equipment templates: weapon=" +
-				std::to_string(WeaponTemplateAddrs.Right.size()) +
-				", shield=" + std::to_string(WeaponTemplateAddrs.Left.size()) +
-				", bow=" + std::to_string(WeaponTemplateAddrs.Bow.size()) + ".",
-				__FUNCTION__);
-		}
-
-		void WriteWeaponResource(
-			std::vector<uint64_t>& templateAddresses,
+		void WriteActorWeaponResource(
+			const std::string& slot,
 			uint64_t actorAddress,
 			const std::string& resource,
 			size_t capacity)
 		{
-			templateAddresses.erase(
-				std::remove_if(
-					templateAddresses.begin(), templateAddresses.end(),
-					[this, &resource, capacity](uint64_t address) {
-						if (!IsMappedWriteRange(address, capacity))
-							return true;
-						Memory::write_string(address, resource, static_cast<int>(capacity), __FUNCTION__);
-						return false;
-					}),
-				templateAddresses.end());
-			if (IsMappedWriteRange(actorAddress, capacity) &&
-				std::find(templateAddresses.begin(), templateAddresses.end(), actorAddress) == templateAddresses.end())
-			{
-				Memory::write_string(actorAddress, resource, static_cast<int>(capacity), __FUNCTION__);
-			}
-			else if (actorAddress != 0 && !IsMappedWriteRange(actorAddress, capacity))
+			if (!IsMappedWriteRange(actorAddress, capacity))
 			{
 				Logging::LoggerService::LogWarning(
-					"Skipped stale actor-local equipment address for player " +
+					"Skipped unavailable actor-local " + slot + " address for player " +
 					std::to_string(PlayerNumber) + ".",
 					__FUNCTION__);
+				return;
 			}
+
+			const std::string before = Memory::read_string(actorAddress, capacity, __FUNCTION__);
+			Memory::write_string(actorAddress, resource, static_cast<int>(capacity), __FUNCTION__);
+			const std::string after = Memory::read_string(actorAddress, capacity, __FUNCTION__);
+			std::stringstream stream;
+			stream << "Player " << PlayerNumber << " actor-local " << slot
+				<< " resource at 0x" << std::hex << actorAddress << ": before="
+				<< (before.empty() ? "none" : before) << ", requested="
+				<< (resource.empty() ? "none" : resource) << ", readback="
+				<< (after.empty() ? "none" : after) << ".";
+			Logging::LoggerService::LogInformation(stream.str(), __FUNCTION__);
 		}
 
 		struct WeaponAddr 
@@ -440,13 +412,6 @@ namespace DataTypes
 			uint64_t Right = 0;
 			uint64_t Bow = 0;
 		} WeaponAddrs;
-
-		struct WeaponTemplateAddr
-		{
-			std::vector<uint64_t> Left;
-			std::vector<uint64_t> Right;
-			std::vector<uint64_t> Bow;
-		} WeaponTemplateAddrs;
 
 		struct ArmorAddr
 		{

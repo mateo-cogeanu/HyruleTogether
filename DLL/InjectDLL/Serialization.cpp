@@ -5,6 +5,27 @@
 
 using namespace Serialization;
 
+namespace
+{
+	bool SameEquipment(const CharacterEquipment& left, const CharacterEquipment& right)
+	{
+		return left.WType == right.WType && left.Sword == right.Sword &&
+			left.Shield == right.Shield && left.Bow == right.Bow &&
+			left.Head == right.Head && left.Upper == right.Upper &&
+			left.Lower == right.Lower;
+	}
+
+	std::string EquipmentWireValues(
+		const CharacterEquipment& equipment, bool isEquipped)
+	{
+		return "WType=" + std::to_string(equipment.WType) +
+			", sword=" + std::to_string(equipment.Sword) +
+			", shield=" + std::to_string(equipment.Shield) +
+			", bow=" + std::to_string(equipment.Bow) +
+			", IsEquipped=" + std::to_string(isEquipped ? 1 : 0);
+	}
+}
+
 #pragma region Deserialization
 
 DTO::ServerDTO* Serializer::DeserializeServerData(byte* inputBytes)
@@ -251,6 +272,23 @@ DTO::CloseCharacterDTO* Serializer::DeserializeCloseCharacter(std::vector<byte> 
 	copyData(&result->Equipment.Head, &input[0] + currentIndex, 2);
 	copyData(&result->Equipment.Upper, &input[0] + currentIndex, 2);
 	copyData(&result->Equipment.Lower, &input[0] + currentIndex, 2);
+
+	static std::map<byte, CharacterEquipment> lastEquipmentByPlayer;
+	static std::map<byte, bool> lastEquippedStateByPlayer;
+	const auto lastEquipment = lastEquipmentByPlayer.find(result->PlayerNumber);
+	const auto lastState = lastEquippedStateByPlayer.find(result->PlayerNumber);
+	if (lastEquipment == lastEquipmentByPlayer.end() ||
+		lastState == lastEquippedStateByPlayer.end() ||
+		!SameEquipment(lastEquipment->second, result->Equipment) ||
+		lastState->second != result->IsEquipped)
+	{
+		lastEquipmentByPlayer[result->PlayerNumber] = result->Equipment;
+		lastEquippedStateByPlayer[result->PlayerNumber] = result->IsEquipped;
+		Logging::LoggerService::LogInformation(
+			"Equipment wire receiver player " + std::to_string(result->PlayerNumber) +
+			": " + EquipmentWireValues(result->Equipment, result->IsEquipped) + ".",
+			__FUNCTION__);
+	}
 
 	std::map<byte, std::string> MapDict = { {1, "MainField"}, {2, "MainFieldDungeon"}, {3, "CDungeon"}, {4, "AoCField"} };
 	std::map<byte, std::string> DvnBstDict = { {1, "RemainsWind"}, {2, "RemainsWater"}, {3, "RemainsElectric"}, {4, "RemainsFire"} };
@@ -507,6 +545,21 @@ void Serializer::SerializeWorldData(DTO::WorldDTO* input)
 
 void Serializer::SerializeCharacterData(DTO::ClientCharacterDTO* input)
 {
+	static bool senderLogInitialized = false;
+	static CharacterEquipment lastSentEquipment{};
+	static bool lastSentEquippedState = false;
+	if (!senderLogInitialized || !SameEquipment(lastSentEquipment, input->Equipment) ||
+		lastSentEquippedState != input->IsEquipped)
+	{
+		senderLogInitialized = true;
+		lastSentEquipment = input->Equipment;
+		lastSentEquippedState = input->IsEquipped;
+		Logging::LoggerService::LogInformation(
+			"Equipment wire sender: " +
+			EquipmentWireValues(input->Equipment, input->IsEquipped) + ".",
+			__FUNCTION__);
+	}
+
 	copyData(&ClientData[0] + currentIndex, &input->Position, 12);
 	copyData(&ClientData[0] + currentIndex, &input->Rotation1, 16);
 	copyData(&ClientData[0] + currentIndex, &input->Rotation2, 16);

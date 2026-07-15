@@ -64,6 +64,7 @@ namespace MemoryAccess
 		std::atomic<bool> RunThread{ false };
 		std::atomic<bool> SpawnPending{ false };
 		std::atomic<bool> EquipmentRefreshPending{ false };
+		std::atomic<bool> LastIsEquipped{ false };
 		DWORD SpawnRequestedAt = 0;
 #ifndef _WIN32
 		std::atomic<bool> AnimationControlsResolved{ false };
@@ -167,6 +168,9 @@ namespace MemoryAccess
 			// this snapshot while constructing the actor, so its first visible frame
 			// already has the remote player's current armor and weapons.
 			const bool equipmentChanged = Equipment->Compare(PlayerData->Equipment);
+			const bool equippedStateChanged =
+				LastIsEquipped.exchange(PlayerData->IsEquipped, std::memory_order_acq_rel) !=
+				PlayerData->IsEquipped;
 
 			if (this->baseAddr == 0)
 				return;
@@ -255,7 +259,18 @@ namespace MemoryAccess
 			LastAnimation = PlayerData->Animation;
 
 			if (HoldAddr != 0)
-				Memory::write_string(HoldAddr, PlayerData->IsEquipped ? "Hold" : "Equip", 6, __FUNCTION__);
+			{
+				const std::string equipmentState = PlayerData->IsEquipped ? "Hold" : "Equip";
+				Memory::write_string(HoldAddr, equipmentState, 6, __FUNCTION__);
+				if (equippedStateChanged)
+				{
+					std::stringstream stream;
+					stream << "Player " << PlayerNumber << " equipment hold control at 0x"
+						<< std::hex << HoldAddr << ": requested=" << equipmentState
+						<< ", readback=" << Memory::read_string(HoldAddr, 6, __FUNCTION__) << ".";
+					Logging::LoggerService::LogInformation(stream.str(), __FUNCTION__);
+				}
+			}
 			if (equipmentChanged && this->baseAddr != 0)
 			{
 				this->EquipmentRefreshPending.store(true, std::memory_order_release);

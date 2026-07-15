@@ -63,6 +63,7 @@ cp "$root/BNP Files/MilkBarLauncher.bnp" "$staging/runtime/mod/"
 (cd "$staging/runtime/mod" && cmake -E tar xvf MilkBarLauncher.bnp >/dev/null)
 cp "$root/CrossPlatform/patch_BeltLookupGuard.asm" "$staging/runtime/mod/patches/"
 "$python" "$root/scripts/patch-spawn-owner.py" "$staging/runtime/mod/patches/patch_SpawnActors.asm"
+"$python" "$root/scripts/patch-equipment-factory.py" "$staging/runtime/mod/patches/patch_SpawnActors.asm"
 "$python" "$root/scripts/patch-actor-delete.py" "$staging/runtime/mod/patches/patch_UKL_ActorInterceptor.asm"
 rm -rf "$staging/runtime/mod/content" "$staging/runtime/mod/logs" "$staging/runtime/mod/info.json"
 cp "$root/Build/ukmm/$target/ukmm" "$root/Build/ukmm/$target/UKMM-LICENSE" "$staging/runtime/tools/"

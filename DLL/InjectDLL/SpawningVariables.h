@@ -165,6 +165,16 @@ struct CompletedAnimation
 std::map<int, CompletedAnimation> completedAnimations;
 std::map<int, DWORD> lastAnimationPointerWarning;
 
+struct PendingEquipmentChild
+{
+	std::string actorName;
+	std::string slot;
+	int playerNumber;
+};
+
+std::mutex equipment_child_mutex;
+std::vector<PendingEquipmentChild> pendingEquipmentChildren;
+
 std::map<char, bool> prevKeyStateMap; // Used for key press logic - keeps track of previous key state
 
 std::vector<QueueActor> queuedActors;
@@ -196,6 +206,95 @@ bool TryParseRemotePlayerActor(const std::string& name, int& playerNumber)
 		return false;
 	playerNumber = parsedNumber;
 	return true;
+}
+
+bool TryParseEquipmentPlaceholder(const std::string& name, int& playerNumber)
+{
+	if (name.rfind("Jugador", 0) != 0 || name.size() <= 7)
+		return false;
+
+	size_t suffixStart = 7;
+	int parsedNumber = 0;
+	while (suffixStart < name.size() && name[suffixStart] >= '0' && name[suffixStart] <= '9')
+	{
+		parsedNumber = parsedNumber * 10 + (name[suffixStart] - '0');
+		++suffixStart;
+	}
+	if (parsedNumber < 1 || parsedNumber > 32)
+		return false;
+
+	const std::string suffix = name.substr(suffixStart);
+	if (suffix != "RightHandWeaponLongName" &&
+		suffix != "LeftHandWeaponLongName" &&
+		suffix != "BowWeaponLongName")
+		return false;
+
+	playerNumber = parsedNumber;
+	return true;
+}
+
+void ResolveEquipmentActor(PPCInterpreter_t* hCPU)
+{
+	hCPU->instructionPointer = hCPU->sprNew.LR;
+	if (!Game::GameInstance || hCPU->gpr[4] == 0)
+		return;
+
+	const uint64_t nameAddress = Main::baseAddr + hCPU->gpr[4];
+	const std::string placeholder = Memory::read_string(nameAddress, 64, __FUNCTION__);
+	int playerNumber = 0;
+	if (!TryParseEquipmentPlaceholder(placeholder, playerNumber))
+		return;
+
+	const auto player = Instances::PlayerList.find(playerNumber);
+	if (player == Instances::PlayerList.end())
+		return;
+
+	std::string resource;
+	std::string slot;
+	if (!player->second->Equipment->ResolveFactoryResource(placeholder, resource, slot))
+		return;
+
+	if (!resource.empty())
+	{
+		Memory::write_string(
+			nameAddress, resource, static_cast<int>(placeholder.size() + 1), __FUNCTION__);
+		std::lock_guard<std::mutex> childLock(equipment_child_mutex);
+		pendingEquipmentChildren.erase(
+			std::remove_if(
+				pendingEquipmentChildren.begin(), pendingEquipmentChildren.end(),
+				[playerNumber, &slot](const PendingEquipmentChild& child) {
+					return child.playerNumber == playerNumber && child.slot == slot;
+				}),
+			pendingEquipmentChildren.end());
+		pendingEquipmentChildren.push_back({resource, slot, playerNumber});
+	}
+
+	const std::string readback = Memory::read_string(nameAddress, 64, __FUNCTION__);
+	std::stringstream stream;
+	stream << "Player " << playerNumber << " factory " << slot
+		<< " request at guest 0x" << std::hex << hCPU->gpr[4]
+		<< ": placeholder=" << placeholder << ", requested="
+		<< (resource.empty() ? "none" : resource) << ", readback=" << readback
+		<< ", state="
+		<< (player->second->LastIsEquipped.load(std::memory_order_acquire) ? "Hold" : "Equip")
+		<< ".";
+	Logging::LoggerService::LogInformation(stream.str(), __FUNCTION__);
+}
+
+void LogEquipmentChildCreation(const std::string& name, uint32_t actorAddress)
+{
+	std::lock_guard<std::mutex> childLock(equipment_child_mutex);
+	const auto pending = std::find_if(
+		pendingEquipmentChildren.begin(), pendingEquipmentChildren.end(),
+		[&name](const PendingEquipmentChild& child) { return child.actorName == name; });
+	if (pending == pendingEquipmentChildren.end())
+		return;
+
+	std::stringstream stream;
+	stream << "Player " << pending->playerNumber << " created " << pending->slot
+		<< " child " << name << " at guest 0x" << std::hex << actorAddress << ".";
+	Logging::LoggerService::LogInformation(stream.str(), __FUNCTION__);
+	pendingEquipmentChildren.erase(pending);
 }
 
 void DespawnStalePlayerActors()
@@ -940,6 +1039,7 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 		return;
 
 	std::string name = Memory::read_string(Main::baseAddr + hCPU->gpr[3] + 0x10, 100, __FUNCTION__);
+	LogEquipmentChildCreation(name, hCPU->gpr[3]);
 	static std::atomic<int> actorHookSamples{0};
 	int sample = actorHookSamples.fetch_add(1, std::memory_order_relaxed);
 	if (sample < 32)
@@ -1002,13 +1102,16 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 		// A replacement may reuse the same guest address. Never let the previous
 		// actor's completed AS request suppress the first animation on this one.
 		resetRemoteAnimationDispatch(spawnedPlayer);
-		// BOTW resolves the actor's model and equipment resources during creation.
-		// The first actor lets us find and patch its resource-name buffers; one
-		// controlled reload is then required for those names to become visible.
-		// Consume before writing so a newer concurrent equipment update remains
-		// pending for its own reload.
+		// BOTW resolves equipment children during actor creation. The factory hook
+		// records whether it replaced this actor's unique placeholders in time. Keep
+		// the established one-shot reload only as a fallback when that hook was not
+		// observed. Consume before writing so a newer concurrent equipment update
+		// remains pending for its own reload.
+		const bool resolvedDuringFactory =
+			player->second->Equipment->ConsumeFactoryResolution();
+		const bool refreshRequested = player->second->Equipment->ConsumeActorRefresh();
 		const bool requiresEquipmentReload =
-			player->second->Equipment->ConsumeActorRefresh() &&
+			refreshRequested && !resolvedDuringFactory &&
 			player->second->Model.ModelType == 0;
 		if (requiresEquipmentReload)
 			player->second->EquipmentRefreshPending.store(true, std::memory_order_release);
@@ -1020,11 +1123,19 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 		if (requiresEquipmentReload)
 		{
 			Logging::LoggerService::LogDebug(
-				"Staged initial equipment resources for player " +
+				"Equipment factory resolution was not observed for player " +
 				std::to_string(spawnedPlayer) +
-				"; scheduling one actor reload.",
+				"; scheduling the existing controlled actor reload.",
 				__FUNCTION__);
 			queueRemoteActorRefresh(spawnedPlayer, hCPU->gpr[3]);
+		}
+		else if (refreshRequested && resolvedDuringFactory)
+		{
+			Logging::LoggerService::LogDebug(
+				"Initial equipment for player " + std::to_string(spawnedPlayer) +
+				" was resolved during child actor creation; no redundant reload is required.",
+				__FUNCTION__);
+			player->second->EquipmentRefreshPending.store(false, std::memory_order_release);
 		}
 		else
 		{
@@ -1438,6 +1549,7 @@ void init() {
 	if (!osLib_registerHLEFunction)
 		throw std::runtime_error("Cemu is missing the Milk Bar HLE hooks; run scripts/patch-cemu.sh before building Cemu");
 	osLib_registerHLEFunction("spawnactors", "fnCallMain", static_cast<void (*) (PPCInterpreter_t*)>(&mainFn));
+	osLib_registerHLEFunction("spawnactors", "ResolveEquipmentActor", static_cast<void (*) (PPCInterpreter_t*)>(&ResolveEquipmentActor));
 	osLib_registerHLEFunction("multiplayer", "WeatherSync", static_cast<void (*) (PPCInterpreter_t*)>(&WeatherFn));
 	osLib_registerHLEFunction("ukl_actorinterceptor", "OnActorCreate", static_cast<void (*) (PPCInterpreter_t*)>(&OnActorCreate));
 	// Clear native actor state only after BOTW actually erases the actor. The

@@ -586,7 +586,10 @@ namespace MemoryAccess
 			result->Animation = this->Animation->get(__FUNCTION__);
 			result->Health = this->Health->get(__FUNCTION__);
 			result->AtkUp = this->AtkUp->get(__FUNCTION__);
-			result->IsEquipped = this->IsEquipped->get(__FUNCTION__);
+			// BOTW stores zero while Link is actively holding the equipped item.
+			// Preserve the legacy sender's logical value instead of serializing the
+			// raw inverted byte used by the game.
+			result->IsEquipped = !this->IsEquipped->get(__FUNCTION__);
 			result->Equipment = this->Equipment->getEquipment(__FUNCTION__);
 			result->Location = this->Location->get(__FUNCTION__);
 			result->Bomb = this->Bomb->get(__FUNCTION__);
