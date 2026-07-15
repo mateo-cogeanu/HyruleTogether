@@ -8,9 +8,24 @@ if (args.Length == 2 && args[0] == "--inspect")
     return 0;
 }
 
+if (args.Length == 2 && args[0] == "--patch-event-flow")
+{
+    try
+    {
+        PatchTitleArchive(Path.GetFullPath(args[1]));
+        return 0;
+    }
+    catch (Exception exception)
+    {
+        Console.Error.WriteLine(exception);
+        return 1;
+    }
+}
+
 if (args.Length != 3)
 {
     Console.Error.WriteLine("Usage: milkbar-model-builder BASE_CONTENT UPDATE_CONTENT OUTPUT_CONTENT");
+    Console.Error.WriteLine("       milkbar-model-builder --patch-event-flow TITLE_BG_PACK");
     return 2;
 }
 
@@ -86,13 +101,14 @@ static void BuildModels(string baseContent, string updateContent, string outputC
     SaveCompressed(outputTex2, Path.Combine(modelDirectory, $"{ModelName}.Tex2.sbfres"));
 
     BuildNoFaceAnimations(baseContent, modelDirectory);
-    RestoreLocalLinkActors(baseContent, updateContent, outputContent, title);
+    RestoreLocalLinkActors(baseContent, updateContent, outputContent);
+    PatchMultiplayerEventFlow(outputContent);
 
     Console.WriteLine($"Created {ModelName} with {outputModel.Models.Count} models, " +
                       $"{outputTex1.Textures.Count} Tex1 textures and {outputTex2.Textures.Count} Tex2 textures.");
 }
 
-static void RestoreLocalLinkActors(string baseContent, string updateContent, string outputContent, byte[] vanillaTitle)
+static void RestoreLocalLinkActors(string baseContent, string updateContent, string outputContent)
 {
     string outputActors = Path.Combine(outputContent, "Actor", "Pack");
     foreach (string outputPath in Directory.EnumerateFiles(outputActors, "Armor_*.sbactorpack"))
@@ -111,14 +127,119 @@ static void RestoreLocalLinkActors(string baseContent, string updateContent, str
     string? pauseSource = File.Exists(updatePause) ? updatePause : (File.Exists(basePause) ? basePause : null);
     if (File.Exists(outputPause) && pauseSource is not null)
         File.Copy(pauseSource, outputPause, true);
+}
 
-    // BOTW loads TitleBG.pack before gameplay actor packs and current Cemu
-    // depends on Nintendo's original archive layout. UKMM's rebuilt archive
-    // makes remote actors enter DeleteLater immediately after creation, so
-    // preserve the update archive byte-for-byte. Animation controls are
-    // optional in the native client; core actor and position sync remain live.
-    string outputTitle = Path.Combine(outputContent, "Pack", "TitleBG.pack");
-    File.WriteAllBytes(outputTitle, vanillaTitle);
+static void PatchMultiplayerEventFlow(string outputContent)
+{
+    string titlePath = Path.Combine(outputContent, "Pack", "TitleBG.pack");
+    PatchTitleArchive(titlePath);
+}
+
+static void PatchTitleArchive(string titlePath)
+{
+    byte[] title = File.ReadAllBytes(titlePath);
+    if (!title.AsSpan(0, Math.Min(4, title.Length)).SequenceEqual("SARC"u8))
+        throw new InvalidDataException("UKMM's TitleBG.pack must be an uncompressed SARC archive");
+
+    (int start, int end) = FindSarcEntryRange(title, "EventFlow/MultiplayerEvent.bfevfl");
+    int patched = PatchRemoteDeleteStatus(title.AsSpan(start, end - start));
+    if (patched != 32)
+        throw new InvalidDataException($"Expected 32 remote-player delete checks, patched {patched}");
+    File.WriteAllBytes(titlePath, title);
+    Console.WriteLine("Patched 32 remote-player EventFlow delete checks without rebuilding TitleBG.pack.");
+}
+
+static int PatchRemoteDeleteStatus(Span<byte> eventFlow)
+{
+    if (eventFlow.Length < 0x38 || !eventFlow[..8].SequenceEqual("BFEVFL\0\0"u8))
+        throw new InvalidDataException("MultiplayerEvent is not a BFEVFL archive");
+
+    int flowchartPointerArray = ReadOffset(eventFlow, 0x28);
+    int flowchart = ReadOffset(eventFlow, flowchartPointerArray);
+    RequireRange(eventFlow, flowchart, 0x38);
+    if (!eventFlow.Slice(flowchart, 4).SequenceEqual("EVFL"u8))
+        throw new InvalidDataException("MultiplayerEvent has no EVFL flowchart");
+
+    int eventCount = Read16LE(eventFlow, flowchart + 0x16);
+    int events = ReadOffset(eventFlow, flowchart + 0x30);
+    RequireRange(eventFlow, events, checked(eventCount * 0x28));
+    int patched = 0;
+
+    for (int index = 0; index < eventCount; index++)
+    {
+        int eventOffset = events + index * 0x28;
+        if (eventFlow[eventOffset + 8] != 1) // SwitchEvent
+            continue;
+
+        int parameters = ReadOffset(eventFlow, eventOffset + 0x10);
+        if (parameters == 0)
+            continue;
+        RequireRange(eventFlow, parameters, 0x10);
+        int itemCount = Read16LE(eventFlow, parameters + 2);
+        RequireRange(eventFlow, parameters + 0x10, checked(itemCount * 8));
+        bool remoteStatusCheck = false;
+        int valueOffset = -1;
+        int value = 0;
+
+        for (int itemIndex = 0; itemIndex < itemCount; itemIndex++)
+        {
+            int item = ReadOffset(eventFlow, parameters + 0x10 + itemIndex * 8);
+            RequireRange(eventFlow, item, 0x14);
+            byte type = eventFlow[item];
+            if (type == 2) // Int
+            {
+                valueOffset = item + 0x10;
+                value = Read32LE(eventFlow, valueOffset);
+            }
+            else if (type == 5) // String
+            {
+                int stringOffset = ReadOffset(eventFlow, item + 0x10);
+                RequireRange(eventFlow, stringOffset, 2);
+                int length = Read16LE(eventFlow, stringOffset);
+                RequireRange(eventFlow, stringOffset + 2, length);
+                string text = System.Text.Encoding.UTF8.GetString(eventFlow.Slice(stringOffset + 2, length));
+                if (text.StartsWith("Jugador", StringComparison.Ordinal) &&
+                    text.EndsWith("_Status", StringComparison.Ordinal))
+                    remoteStatusCheck = true;
+            }
+        }
+
+        // Status 1 is the BNP's saved/default value and can be observed during
+        // actor startup. Reserve 3 for an explicit native-client delete command
+        // so initialization can never run MultiplayerAI's SystemDelete action.
+        if (remoteStatusCheck && valueOffset >= 0 && value == 1)
+        {
+            System.Buffers.Binary.BinaryPrimitives.WriteInt32LittleEndian(
+                eventFlow.Slice(valueOffset, 4), 3);
+            patched++;
+        }
+    }
+    return patched;
+}
+
+static int ReadOffset(ReadOnlySpan<byte> data, int offset)
+{
+    RequireRange(data, offset, 8);
+    ulong value = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(offset, 8));
+    return checked((int)value);
+}
+
+static int Read16LE(ReadOnlySpan<byte> data, int offset)
+{
+    RequireRange(data, offset, 2);
+    return System.Buffers.Binary.BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(offset, 2));
+}
+
+static int Read32LE(ReadOnlySpan<byte> data, int offset)
+{
+    RequireRange(data, offset, 4);
+    return System.Buffers.Binary.BinaryPrimitives.ReadInt32LittleEndian(data.Slice(offset, 4));
+}
+
+static void RequireRange(ReadOnlySpan<byte> data, int offset, int length)
+{
+    if (offset < 0 || length < 0 || offset > data.Length - length)
+        throw new InvalidDataException("MultiplayerEvent contains an invalid offset");
 }
 
 static void BuildNoFaceAnimations(string baseContent, string modelDirectory)
@@ -291,6 +412,12 @@ static byte[] CompressYaz0(byte[] data)
 static byte[] ReadSarcEntry(byte[] yaz0Data, string wanted)
 {
     byte[] data = DecompressMaybe(yaz0Data);
+    (int start, int finish) = FindSarcEntryRange(data, wanted);
+    return data[start..finish];
+}
+
+static (int Start, int End) FindSarcEntryRange(byte[] data, string wanted)
+{
     if (!data.AsSpan(0, 4).SequenceEqual("SARC"u8))
         throw new InvalidDataException("TitleBG.pack is not a SARC archive");
     bool bigEndian = data[6] == 0xfe && data[7] == 0xff;
@@ -314,66 +441,9 @@ static byte[] ReadSarcEntry(byte[] yaz0Data, string wanted)
             continue;
         int start = dataOffset + checked((int)Read32(data, node + 8, bigEndian));
         int finish = dataOffset + checked((int)Read32(data, node + 12, bigEndian));
-        return data[start..finish];
+        return (start, finish);
     }
     throw new FileNotFoundException($"{wanted} was not found in TitleBG.pack");
-}
-
-static byte[] ReplaceSarcEntries(byte[] yaz0Data, IReadOnlyDictionary<string, byte[]> replacements)
-{
-    byte[] data = DecompressMaybe(yaz0Data);
-    if (!data.AsSpan(0, 4).SequenceEqual("SARC"u8))
-        throw new InvalidDataException("Pack is not a SARC archive");
-    bool bigEndian = data[6] == 0xfe && data[7] == 0xff;
-    int headerSize = Read16(data, 4, bigEndian);
-    int dataOffset = checked((int)Read32(data, 12, bigEndian));
-    int nodeHeaderSize = Read16(data, headerSize + 4, bigEndian);
-    int nodeCount = Read16(data, headerSize + 6, bigEndian);
-    int nodes = headerSize + nodeHeaderSize;
-    int sfnt = nodes + nodeCount * 16;
-    int names = sfnt + Read16(data, sfnt + 4, bigEndian);
-
-    using MemoryStream rebuilt = new(data.Length);
-    rebuilt.Write(data, 0, dataOffset);
-    for (int index = 0; index < nodeCount; index++)
-    {
-        while ((rebuilt.Position - dataOffset) % 4 != 0)
-            rebuilt.WriteByte(0);
-        int node = nodes + index * 16;
-        uint attributes = Read32(data, node + 4, bigEndian);
-        int nameOffset = checked((int)(attributes & 0x00ffffff) * 4);
-        int nameEnd = Array.IndexOf(data, (byte)0, names + nameOffset);
-        string name = System.Text.Encoding.UTF8.GetString(data, names + nameOffset, nameEnd - names - nameOffset);
-        int oldStart = dataOffset + checked((int)Read32(data, node + 8, bigEndian));
-        int oldEnd = dataOffset + checked((int)Read32(data, node + 12, bigEndian));
-        byte[] entry = replacements.TryGetValue(name, out byte[]? replacement)
-            ? replacement : data[oldStart..oldEnd];
-        uint newStart = checked((uint)(rebuilt.Position - dataOffset));
-        rebuilt.Write(entry);
-        uint newEnd = checked((uint)(rebuilt.Position - dataOffset));
-        long returnPosition = rebuilt.Position;
-        rebuilt.Position = node + 8;
-        Write32(rebuilt, newStart, bigEndian);
-        Write32(rebuilt, newEnd, bigEndian);
-        rebuilt.Position = returnPosition;
-    }
-    byte[] result = rebuilt.ToArray();
-    using (MemoryStream header = new(result, true))
-    {
-        header.Position = 8;
-        Write32(header, checked((uint)result.Length), bigEndian);
-    }
-    return CompressYaz0(result);
-}
-
-static void Write32(Stream stream, uint value, bool bigEndian)
-{
-    Span<byte> bytes = stackalloc byte[4];
-    if (bigEndian)
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(bytes, value);
-    else
-        System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bytes, value);
-    stream.Write(bytes);
 }
 
 static ushort Read16(byte[] data, int offset, bool bigEndian) => bigEndian

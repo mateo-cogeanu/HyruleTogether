@@ -14,6 +14,7 @@ namespace MemoryAccess
 	class Player : public Actor
 	{
 	public:
+		static constexpr int DELETE_STATUS = 3;
 		int PlayerNumber;
 		bool isFar = true;
 		bool connected = false;
@@ -110,7 +111,7 @@ namespace MemoryAccess
 				return;
 
 			const std::string DEFAULT_ANIM = "Jugador" + std::to_string(PlayerNumber) + "_animationthing";
-			const std::string DEFAULT_ATTACK = "Jugador32_AttackAnimation";
+			const std::string DEFAULT_ATTACK = "Jugador" + std::to_string(PlayerNumber) + "_AttackAnimation";
 
 			/* Attack detection
 			Animations stored in AttackAnimations are the animations we have identified as attack such as Sword_Attack_S1
@@ -161,7 +162,7 @@ namespace MemoryAccess
 			if (PlayerData->Animation == 835249056)
 				IsAttack = false;
 
-			if (this->Status->get(__FUNCTION__) != 1)
+			if (this->Status->get(__FUNCTION__) != DELETE_STATUS)
 			{
 				if (IsAttack && (IsCharge || PlayerData->Animation != LastAnimation))
 				{
@@ -218,7 +219,7 @@ namespace MemoryAccess
 				return;
 
 			UpdateName(DispNames);
-			this->Status->set(1, __FUNCTION__);
+			this->Status->set(DELETE_STATUS, __FUNCTION__);
 
 		}
 
@@ -312,7 +313,7 @@ namespace MemoryAccess
 			}
 			UpdateMapPin(Vec3f(0, 0, 0), false);
 			//this->Delete->set(true, __FUNCTION__);
-			this->Status->set(1, __FUNCTION__);
+			this->Status->set(DELETE_STATUS, __FUNCTION__);
 			this->RunThread.store(false, std::memory_order_release);
 			if (pThread.joinable())
 				pThread.join();

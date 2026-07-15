@@ -76,7 +76,7 @@ void Player::PThread()
 			{
 				Logging::LoggerService::LogDebug("Selected action: Delete", __FUNCTION__);
 				//this->Delete->set(true, __FUNCTION__);
-				this->Status->set(1, __FUNCTION__);
+				this->Status->set(Player::DELETE_STATUS, __FUNCTION__);
 
 				while (RunThread.load(std::memory_order_acquire) &&
 					Main::IsCemuTitleActive() && this->baseAddr != 0)
@@ -108,7 +108,7 @@ void Player::PThread()
 				}
 
 				if (this->baseAddr != 0)
-					this->Status->set(1, __FUNCTION__);
+					this->Status->set(Player::DELETE_STATUS, __FUNCTION__);
 					//this->Delete->set(true, __FUNCTION__);
 
 				DWORD deleteTime = GetTickCount();

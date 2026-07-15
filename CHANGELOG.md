@@ -129,8 +129,9 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 - Added automatic creation and validation of the remote-player BFRES model assets.
 - Added automatic UKMM merge against the user's own decrypted base game, update, and DLC files.
 - Fixed UKMM's incremental deployment leaving older content in Cemu after producing a correct final merge. The launcher now replaces the deployed content and DLC trees from UKMM's completed merged storage, validates the source multiplayer animation controls before post-processing, and versions this deployment behavior so existing installations rebuild automatically on both macOS and Linux.
-- Made the deployment marker self-healing: even when its signature matches, the launcher now rebuilds instead of launching if the active Cemu graphic-pack `TitleBG.pack` differs from the original BOTW update archive.
-- Restored Nintendo's byte-exact `TitleBG.pack` after UKMM and model post-processing because the rebuilt EventFlow archive made BOTW delete every macOS remote-player actor immediately after creation. The launcher now validates the stable archive on cached launches; optional animation controls yield to persistent actor, position, equipment, and name synchronization.
+- Made the deployment marker self-healing: even when its signature matches, the launcher now rebuilds instead of launching if the active Cemu graphic-pack `TitleBG.pack` is missing the multiplayer animation controls.
+- Diagnosed the create/delete loop in the rebuilt EventFlow archive: `Jugador*_Status` was saved with a default value of `1`, while `MultiplayerEvent` also interpreted `1` as `SystemDelete`, allowing a remote actor to erase itself during initialization.
+- Re-enabled remote animation EventFlow without the create/delete loop. The model builder now patches all 32 delete checks in place to use an explicit status value instead of the BNP's saved/default value, the native client uses that reserved value for despawning, and per-player attack writes no longer overrun shorter EventFlow string buffers.
 - Added validation that required model and animation files were produced before launch.
 - Added automatic installation and enablement of the generated Cemu graphic pack.
 - Added a belt-lookup guard patch to avoid invalid equipment/model lookup crashes.

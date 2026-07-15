@@ -183,7 +183,7 @@ void DespawnStalePlayerActors()
 	for (const auto& player : Instances::PlayerList)
 	{
 		player.second->setAddress(0);
-		player.second->Status->set(1, __FUNCTION__);
+		player.second->Status->set(MemoryAccess::Player::DELETE_STATUS, __FUNCTION__);
 	}
 
 	// BOTW consumes the status flags from its actor update loop. The bounded
@@ -600,7 +600,7 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 
 		if (stalePlayerCleanupActive.load(std::memory_order_acquire))
 		{
-			player->second->Status->set(1, __FUNCTION__);
+			player->second->Status->set(MemoryAccess::Player::DELETE_STATUS, __FUNCTION__);
 			std::stringstream cleanupStream;
 			cleanupStream << "Marked stale player " << spawnedPlayer << " at 0x"
 				<< std::hex << Main::baseAddr + hCPU->gpr[3] << " for despawn.";
@@ -707,7 +707,7 @@ void OnActorErase(PPCInterpreter_t* hCPU)
 		//Instances::PlayerList[spawnedPlayer]->Delete->set(false, __FUNCTION__);
 		if (stalePlayerCleanupActive.load(std::memory_order_acquire))
 		{
-			player->second->Status->set(1, __FUNCTION__);
+			player->second->Status->set(MemoryAccess::Player::DELETE_STATUS, __FUNCTION__);
 			stalePlayerEraseCount.fetch_add(1, std::memory_order_relaxed);
 		}
 		else
