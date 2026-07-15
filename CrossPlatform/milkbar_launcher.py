@@ -26,7 +26,7 @@ CEMU_RUNTIMES = {
     "Linux_arm64": "Linux arm64",
 }
 
-UKMM_DEPLOYMENT_SCHEMA = b"authoritative-final-merge-v1"
+UKMM_DEPLOYMENT_SCHEMA = b"stable-title-bg-v2"
 REQUIRED_MULTIPLAYER_GAME_DATA = (
     b"Jugador1_Hold",
     b"Jugador1_animationthing",
@@ -426,6 +426,16 @@ def _file_contains_all(path: Path, needles: tuple[bytes, ...]) -> bool:
     return False
 
 
+def _files_identical(first: Path, second: Path) -> bool:
+    if not first.is_file() or not second.is_file() or first.stat().st_size != second.stat().st_size:
+        return False
+    with first.open("rb") as left, second.open("rb") as right:
+        while left_chunk := left.read(1024 * 1024):
+            if left_chunk != right.read(len(left_chunk)):
+                return False
+    return True
+
+
 def _deploy_final_ukmm_merge(merged_root: Path, output_pack: Path) -> None:
     """Replace UKMM's incremental output with its completed merged trees."""
     merged_content = merged_root / "content"
@@ -446,20 +456,16 @@ def _deploy_final_ukmm_merge(merged_root: Path, output_pack: Path) -> None:
         )
 
 
-def _restore_multiplayer_title_bg(merged_root: Path, output_pack: Path) -> None:
-    """Keep the final UKMM EventFlow archive authoritative after post-processing."""
-    source = merged_root / "content" / "Pack" / "TitleBG.pack"
+def _restore_stable_title_bg(update_content: Path, output_pack: Path) -> None:
+    """Preserve Nintendo's TitleBG layout so remote actors remain alive."""
+    source = update_content / "Pack" / "TitleBG.pack"
     destination = output_pack / "content" / "Pack" / "TitleBG.pack"
-    if not _file_contains_all(source, REQUIRED_MULTIPLAYER_GAME_DATA):
-        raise RuntimeError(
-            "UKMM's final TitleBG.pack is missing Hyrule Together's animation controls"
-        )
+    if not source.is_file():
+        raise RuntimeError("The BOTW update is missing its original TitleBG.pack")
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
-    if not _file_contains_all(destination, REQUIRED_MULTIPLAYER_GAME_DATA):
-        raise RuntimeError(
-            "The deployed TitleBG.pack is missing Hyrule Together's animation controls"
-        )
+    if not _files_identical(source, destination):
+        raise RuntimeError("Could not preserve the original BOTW TitleBG.pack")
 
 
 def install_bundled_mod(config: dict[str, Any], force: bool = False) -> Path:
@@ -497,7 +503,8 @@ def install_bundled_mod(config: dict[str, Any], force: bool = False) -> Path:
     marker = output_pack / ".milkbar-signature"
     if not force and marker.is_file() and marker.read_text(encoding="utf-8").strip() == signature:
         active_title_bg = output_pack / "content" / "Pack" / "TitleBG.pack"
-        if _file_contains_all(active_title_bg, REQUIRED_MULTIPLAYER_GAME_DATA):
+        vanilla_title_bg = update_content / "Pack" / "TitleBG.pack"
+        if _files_identical(active_title_bg, vanilla_title_bg):
             _require_extended_memory_pack(cemu_root / "config")
             _configure_cemu_settings(cemu_root / "config")
             return output_pack
@@ -570,10 +577,7 @@ def install_bundled_mod(config: dict[str, Any], force: bool = False) -> Path:
     animation_path = output_pack / "content" / "Model" / "Player_Animation_NoFace.sbfres"
     if not animation_path.is_file() or animation_path.stat().st_size < 1024:
         raise RuntimeError("Hyrule Together player model creation did not produce Player_Animation_NoFace.sbfres")
-    _restore_multiplayer_title_bg(
-        ukmm_root / "storage" / "wiiu" / "profiles" / "Default" / "merged",
-        output_pack,
-    )
+    _restore_stable_title_bg(update_content, output_pack)
     for patch in patches:
         shutil.copy2(patch, output_pack / patch.name)
     marker.write_text(signature, encoding="utf-8")

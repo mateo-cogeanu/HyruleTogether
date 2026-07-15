@@ -86,13 +86,13 @@ static void BuildModels(string baseContent, string updateContent, string outputC
     SaveCompressed(outputTex2, Path.Combine(modelDirectory, $"{ModelName}.Tex2.sbfres"));
 
     BuildNoFaceAnimations(baseContent, modelDirectory);
-    RestoreLocalLinkActors(baseContent, updateContent, outputContent);
+    RestoreLocalLinkActors(baseContent, updateContent, outputContent, title);
 
     Console.WriteLine($"Created {ModelName} with {outputModel.Models.Count} models, " +
                       $"{outputTex1.Textures.Count} Tex1 textures and {outputTex2.Textures.Count} Tex2 textures.");
 }
 
-static void RestoreLocalLinkActors(string baseContent, string updateContent, string outputContent)
+static void RestoreLocalLinkActors(string baseContent, string updateContent, string outputContent, byte[] vanillaTitle)
 {
     string outputActors = Path.Combine(outputContent, "Actor", "Pack");
     foreach (string outputPath in Directory.EnumerateFiles(outputActors, "Armor_*.sbactorpack"))
@@ -111,6 +111,14 @@ static void RestoreLocalLinkActors(string baseContent, string updateContent, str
     string? pauseSource = File.Exists(updatePause) ? updatePause : (File.Exists(basePause) ? basePause : null);
     if (File.Exists(outputPause) && pauseSource is not null)
         File.Copy(pauseSource, outputPause, true);
+
+    // BOTW loads TitleBG.pack before gameplay actor packs and current Cemu
+    // depends on Nintendo's original archive layout. UKMM's rebuilt archive
+    // makes remote actors enter DeleteLater immediately after creation, so
+    // preserve the update archive byte-for-byte. Animation controls are
+    // optional in the native client; core actor and position sync remain live.
+    string outputTitle = Path.Combine(outputContent, "Pack", "TitleBG.pack");
+    File.WriteAllBytes(outputTitle, vanillaTitle);
 }
 
 static void BuildNoFaceAnimations(string baseContent, string modelDirectory)

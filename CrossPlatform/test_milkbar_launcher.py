@@ -85,19 +85,31 @@ class CemuGraphicPackSettingsTests(unittest.TestCase):
                 launcher._file_contains_all(title, launcher.REQUIRED_MULTIPLAYER_GAME_DATA)
             )
 
-    def test_restore_multiplayer_title_bg_replaces_postprocessed_archive(self) -> None:
+    def test_restore_stable_title_bg_replaces_rebuilt_archive(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
-            source = root / "merged/content/Pack/TitleBG.pack"
+            source = root / "update/Pack/TitleBG.pack"
             destination = root / "output/content/Pack/TitleBG.pack"
             source.parent.mkdir(parents=True)
             destination.parent.mkdir(parents=True)
-            source.write_bytes(b"\0".join(launcher.REQUIRED_MULTIPLAYER_GAME_DATA))
-            destination.write_bytes(b"vanilla title archive")
+            source.write_bytes(b"Nintendo title archive")
+            destination.write_bytes(b"rebuilt title archive")
 
-            launcher._restore_multiplayer_title_bg(root / "merged", root / "output")
+            launcher._restore_stable_title_bg(root / "update", root / "output")
 
             self.assertEqual(destination.read_bytes(), source.read_bytes())
+
+    def test_files_identical_compares_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "first.pack"
+            second = root / "second.pack"
+            first.write_bytes(b"same-size-A")
+            second.write_bytes(b"same-size-B")
+
+            self.assertFalse(launcher._files_identical(first, second))
+            second.write_bytes(first.read_bytes())
+            self.assertTrue(launcher._files_identical(first, second))
 
 
 if __name__ == "__main__":
