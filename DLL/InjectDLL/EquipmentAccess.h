@@ -70,13 +70,6 @@ namespace DataTypes
 			return true;
 		}
 
-		void MarkActorApplied()
-		{
-			std::unique_lock<std::shared_mutex> lock(Mutex);
-			NeedsActorRefresh = false;
-			Changed = false;
-		}
-
 		void SetWeapons(uint64_t baseAddr)
 		{
 			std::string RIGHT_DEFAULT = "RightHandWeaponLongName";
@@ -175,7 +168,11 @@ namespace DataTypes
 
 					this->SetupFailed = false;
 					this->Changed = false;
-					Logging::LoggerService::LogInformation("Armor setup.", __FUNCTION__);
+					Logging::LoggerService::LogInformation(
+						"Armor setup: head=" + HeadToWrite +
+						", upper=" + UpperToWrite +
+						", lower=" + LowerToWrite + ".",
+						__FUNCTION__);
 				}
 				catch (...)
 				{

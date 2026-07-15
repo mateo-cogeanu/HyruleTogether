@@ -952,14 +952,28 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 		// A replacement may reuse the same guest address. Never let the previous
 		// actor's completed AS request suppress the first animation on this one.
 		resetRemoteAnimationDispatch(spawnedPlayer);
-		// The actor is about to receive the latest cached equipment. Clear the
-		// pre-spawn refresh first so any newer network update remains pending.
-		player->second->Equipment->MarkActorApplied();
+		// BOTW resolves the actor's model and equipment resources during creation.
+		// The first actor lets us find and patch its resource-name buffers; one
+		// controlled reload is then required for those names to become visible.
+		// Consume before writing so a newer concurrent equipment update remains
+		// pending for its own reload.
+		const bool requiresEquipmentReload =
+			player->second->Equipment->ConsumeActorRefresh() &&
+			player->second->Model.ModelType == 0;
 		player->second->Equipment->SetWeapons(hCPU->gpr[3]);
 		player->second->Equipment->SetArmor();
 		player->second->Bumii->setAddress(hCPU->gpr[3]);
 
 		Logging::LoggerService::LogDebug("Player " + std::to_string(spawnedPlayer) + " setup correctly.", __FUNCTION__);
+		if (requiresEquipmentReload)
+		{
+			Logging::LoggerService::LogDebug(
+				"Staged initial equipment resources for player " +
+				std::to_string(spawnedPlayer) +
+				"; scheduling one actor reload.",
+				__FUNCTION__);
+			queueRemoteActorRefresh(spawnedPlayer, hCPU->gpr[3]);
+		}
 	}
 
 	if (name.rfind("Enemy_", 0) == 0)
