@@ -479,7 +479,12 @@ namespace MemoryAccess
 
 				if (retries == 15)
 				{
-					throw std::runtime_error("Failed to find mod address. Make sure that the mod is installed correctly in BCML.");
+					Logging::LoggerService::LogWarning(
+						"Optional map pin flags are unavailable; continuing without remote map pins.",
+						__FUNCTION__);
+					Logging::LoggerService::LogInformation(
+						"Scanned game flags successfully without optional map pins.", __FUNCTION__);
+					return result;
 				}
 
 				addr = Memory::PatternScan(sig, Memory::getBaseAddress(), 8) + 0x1;
@@ -489,11 +494,13 @@ namespace MemoryAccess
 			for (int i = 0; i < 32; i++)
 			{
 				result[FlagOrder2[i]].MapPin = addr;
+				if (i == 31)
+					break;
 
 				uint64_t offset = 0x40;
 				std::vector<BYTE> MapPin = { 0x46, 0x40, 0xD2, 0x00, 0x45, 0x12, 0x98, 0x00 };
 
-				while (true)
+				while (offset < 0x10000)
 				{
 					if (Memory::read_bytes(addr + offset, 8, __FUNCTION__) == MapPin)
 					{
@@ -502,6 +509,18 @@ namespace MemoryAccess
 					}
 
 					offset += 0x4;
+				}
+
+				if (offset == 0x10000)
+				{
+					for (int player = 1; player < 33; player++)
+						result[player].MapPin = 0;
+					Logging::LoggerService::LogWarning(
+						"Optional map pin flag layout is incomplete; continuing without remote map pins.",
+						__FUNCTION__);
+					Logging::LoggerService::LogInformation(
+						"Scanned game flags successfully without optional map pins.", __FUNCTION__);
+					return result;
 				}
 			}
 

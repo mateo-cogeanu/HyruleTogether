@@ -44,7 +44,7 @@ namespace MemoryAccess
 		uint64_t NameAddr;
 		uint64_t AnimAddr;
 		uint64_t HoldAddr;
-		Vec3fBE* MapPin;
+		Vec3fBE* MapPin = nullptr;
 		uint64_t AttackAddr;
 		BombAccess* Bomb = new BombAccess();
 		BombAccess* Bomb2 = new BombAccess();
@@ -77,7 +77,8 @@ namespace MemoryAccess
 			NameAddr = actorFlags.NameFlag;
 			AnimAddr = actorFlags.AnimationFlag;
 			HoldAddr = actorFlags.HoldFlag;
-			MapPin = new Vec3fBE(actorFlags.MapPin, __FUNCTION__);
+			if (actorFlags.MapPin != 0)
+				MapPin = new Vec3fBE(actorFlags.MapPin, __FUNCTION__);
 			AttackAddr = actorFlags.AttackAnimation;
 		}
 
@@ -435,6 +436,8 @@ namespace MemoryAccess
 
 		void UpdateMapPin(Vec3f newPosition, bool show)
 		{
+			if (MapPin == nullptr)
+				return;
 			if (show)
 				MapPin->set(newPosition, __FUNCTION__);
 			else
