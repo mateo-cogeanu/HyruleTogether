@@ -1770,7 +1770,7 @@ void init() {
 	osLib_registerHLEFunction("multiplayer", "WeatherSync", static_cast<void (*) (PPCInterpreter_t*)>(&WeatherFn));
 	osLib_registerHLEFunction("ukl_actorinterceptor", "OnActorCreate", static_cast<void (*) (PPCInterpreter_t*)>(&OnActorCreate));
 	Logging::LoggerService::LogInformation(
-		"Equipment synchronization runtime: raw-controller-equip-state-v8.",
+		"Equipment synchronization runtime: corrected-controller-polarity-v9.",
 		__FUNCTION__);
 	// Clear native actor state only after BOTW actually erases the actor. The
 	// earlier deleteLater hook can run inside the shared PPC dispatcher and must

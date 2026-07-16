@@ -591,11 +591,11 @@ namespace MemoryAccess
 			result->Animation = this->Animation->get(__FUNCTION__);
 			result->Health = this->Health->get(__FUNCTION__);
 			result->AtkUp = this->AtkUp->get(__FUNCTION__);
-			// The legacy sender and live logs agree that zero means actively held;
-			// any nonzero controller flags mean the equipment is sheathed.
+			// Cross-platform visual verification proves that Link's controller flag
+			// is nonzero while equipment is held and zero while it is sheathed.
 			const byte equipmentControllerState =
 				this->EquipmentControllerState->get(__FUNCTION__);
-			result->IsEquipped = equipmentControllerState == 0;
+			result->IsEquipped = equipmentControllerState != 0;
 			static int lastLoggedEquipmentControllerState = -1;
 			if (equipmentControllerState != lastLoggedEquipmentControllerState)
 			{
