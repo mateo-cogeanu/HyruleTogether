@@ -225,6 +225,7 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ### Documentation and build hygiene
 
+- Documented Debian 13 build and Qt/X11 runtime dependencies after a fresh second-client setup exposed missing libudev headers and XCB libraries. Added a reminder to rebuild generated CMake and Python environments on each platform.
 - Fixed `build-server.sh` on the Bash 3 version bundled with macOS, where expanding an empty restore-options array under `set -u` aborted the build before `dotnet publish` started.
 - Added cross-platform build, development, packaging, configuration, hosting, and runtime documentation.
 - Documented target-specific build requirements and output locations.

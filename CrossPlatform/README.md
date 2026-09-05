@@ -57,6 +57,26 @@ packages used by Cemu. On Linux, install the packages listed in upstream
 `CrossPlatform/requirements.txt`. The macOS builder can create its portable
 application bundle directly when PyInstaller is unavailable.
 
+On Debian 13, install the native build dependencies and the X11 libraries used
+by the Python/Qt launcher before building:
+
+```sh
+sudo apt-get install -y build-essential cmake curl clang git freeglut3-dev \
+  libbluetooth-dev libgcrypt20-dev libglm-dev libgtk-3-dev libpulse-dev \
+  libsecret-1-dev libsystemd-dev libudev-dev libusb-1.0-0-dev libtool \
+  nasm ninja-build pkg-config autoconf automake bison flex zip unzip \
+  wayland-protocols python3-venv python3-pip libxcb-cursor0 libxcb-icccm4 \
+  libxcb-image0 libxcb-keysyms1 libxcb-render-util0
+```
+
+`libudev-dev` is needed by Cemu's vcpkg libusb build even when
+`libusb-1.0-0-dev` is already installed. The `libxcb-*` packages prevent the Qt
+launcher from aborting with a missing `xcb` platform-plugin dependency on a
+minimal X11 desktop. Rust/Cargo is also required when building the bundled
+UKMM merger. Do not copy `Build/` or `.venv/` between macOS and Linux: rebuild
+them on each host, since CMake caches contain absolute source paths and the
+binaries are platform-specific.
+
 On Linux, the Cemu build automatically detects `wayland-protocols >= 1.15`.
 When available it includes native Wayland and X11 support; when absent it
 selects X11-only automatically, which remains usable on Wayland desktops via
