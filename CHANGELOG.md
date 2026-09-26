@@ -4,6 +4,15 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Android client proof of concept
+
+- Added a pinned Android Cemu integration, ARM64 NDK client build, APK build script, connection dialog, and ADB helper for copying an existing prepared multiplayer pack.
+- Adapted native symbol resolution, thread linking, and in-process launcher IPC for Android; guarded Windows-only Winsock linker directives and added 16 KiB native-library alignment.
+- Added BOTW-only startup checks, automatic required-pack activation, session-only server passwords, connection status, and explicit opt-in native startup. Android server hosting and on-device mod merging are not included.
+- Fixed Android builds on macOS by excluding host-specific dependency overlays, and adapted the pinned emulator's immediately joined JNI helper thread for NDK 27.
+- Built the debug APK; passed four Android 16 ARM64 emulator smoke tests, installation/pack-copy checks, native library and APK 16 KiB alignment checks, and a macOS universal client rebuild.
+- Documented the OnePlus 13 / Android 16 test target and the remaining physical-device game and multiplayer validation requirements.
+
 ### Project identity
 
 - Corrected the GitHub repository name from the misspelled `HyruleToghether` to `HyruleTogether` and updated the repository instructions accordingly.

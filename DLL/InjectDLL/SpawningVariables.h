@@ -55,6 +55,11 @@
 			uint32_t UGQR[8];
 		}sprNew;
 	};
+#ifdef __ANDROID__
+    static_assert(offsetof(PPCInterpreter_t, gpr) == 4);
+    static_assert(offsetof(PPCInterpreter_t, fpr) == 136);
+    static_assert(offsetof(PPCInterpreter_t, sprNew) == 696);
+#endif
 	// -----------------------------------------
 
 	typedef void (*osLib_registerHLEFunctionType)(const char* libraryName, const char* functionName, void(*osFunction)(PPCInterpreter_t* hCPU));

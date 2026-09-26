@@ -38,6 +38,11 @@ target_include_directories(MilkBarClient PRIVATE
 if(WIN32)
     target_link_libraries(MilkBarClient PRIVATE ws2_32)
     set_target_properties(MilkBarClient PROPERTIES OUTPUT_NAME InjectDLL)
+elseif(ANDROID)
+    # Android provides pthread APIs in libc; there is no separate libpthread.
+    target_link_libraries(MilkBarClient PRIVATE dl log)
+    target_link_options(MilkBarClient PRIVATE "-Wl,-z,max-page-size=16384")
+    set_target_properties(MilkBarClient PROPERTIES OUTPUT_NAME MilkBarClient)
 elseif(APPLE)
     target_link_libraries(MilkBarClient PRIVATE "-framework CoreFoundation")
     set_target_properties(MilkBarClient PROPERTIES

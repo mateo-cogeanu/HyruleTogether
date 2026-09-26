@@ -186,8 +186,20 @@ BOOL APIENTRY DllMain( HMODULE hModule,
 // LD_PRELOAD and DYLD_INSERT_LIBRARIES load the client before Cemu enters its
 // main loop.  Do as little work as possible in the loader callback and start
 // setup on a detached thread, mirroring DLL_PROCESS_ATTACH on Windows.
+#ifdef __ANDROID__
+// Android starts explicitly after dlopen returns, when C++ globals are ready.
+extern "C" __attribute__((visibility("default"))) void hyrule_startClient()
+#else
 __attribute__((constructor)) static void MilkBarAttach()
+#endif
 {
+#ifdef __ANDROID__
+    // Only the in-app bridge may initiate a session; merely resolving the
+    // library must not start a worker with unconfigured storage or IPC.
+    if (!std::getenv("HYRULE_IPC_FD")) return;
+    static std::atomic_bool started{false};
+    if (started.exchange(true)) return;
+#endif
     CreateThread(nullptr, 0, [](LPVOID) -> DWORD {
         // Start logging before resolving Cemu hooks. Previously a bootstrap
         // failure produced no LatestLog.txt and the launcher eventually

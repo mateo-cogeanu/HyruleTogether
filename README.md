@@ -1,6 +1,10 @@
 # Hyrule Together
 This repository contains the projects needed to build Hyrule Together.
 
+> **Experimental Android client:** ARM64 APK build and OnePlus 13 / Android 16
+> test instructions are in [`Android/README.md`](Android/README.md). The client
+> joins an existing desktop server; Android hosting is not included.
+
 > **macOS and Linux:** build a target-specific, self-contained launcher with
 > Cemu, the multiplayer client, and the dedicated server already included. See
 > [`CrossPlatform/README.md`](CrossPlatform/README.md).

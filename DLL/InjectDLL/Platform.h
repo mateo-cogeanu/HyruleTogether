@@ -129,7 +129,18 @@ inline void FreeLibraryAndExitThread(HMODULE, DWORD code) { pthread_exit(reinter
 
 inline HMODULE GetModuleHandle(const char*) { return RTLD_DEFAULT; }
 inline HMODULE GetModuleHandleA(const char*) { return RTLD_DEFAULT; }
-inline void* GetProcAddress(HMODULE, const char* symbol) { return dlsym(RTLD_DEFAULT, symbol); }
+inline void* GetProcAddress(HMODULE, const char* symbol) {
+#ifdef __ANDROID__
+    // Java loads Cemu with local symbol visibility. Resolve against its handle.
+    void* cemu = dlopen("libCemuAndroid.so", RTLD_NOW | RTLD_NOLOAD);
+    if (!cemu) return nullptr;
+    void* address = dlsym(cemu, symbol);
+    dlclose(cemu);
+    return address;
+#else
+    return dlsym(RTLD_DEFAULT, symbol);
+#endif
+}
 
 inline void GetSystemInfo(SYSTEM_INFO* info) {
     info->lpMinimumApplicationAddress = reinterpret_cast<void*>(0x1000);

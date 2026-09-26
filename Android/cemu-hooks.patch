@@ -1,0 +1,155 @@
+diff --git a/src/Cafe/CafeSystem.cpp b/src/Cafe/CafeSystem.cpp
+index cccd786..88dc7fe 100644
+--- a/src/Cafe/CafeSystem.cpp
++++ b/src/Cafe/CafeSystem.cpp
+@@ -463,6 +463,7 @@ namespace CafeSystem
+ 	std::optional<std::vector<std::string>> s_overrideArgs;
+ 
+ 	bool sSystemRunning = false;
++	static std::atomic_bool s_milkbarTitleActive{false};
+ 	TitleId sForegroundTitleId = 0;
+ 
+ 	bool sTitlePaused = false;
+@@ -902,6 +903,7 @@ namespace CafeSystem
+ 		PPCTimer_waitForInit();
+ 		// start system
+ 		sSystemRunning = true;
++		s_milkbarTitleActive.store(true, std::memory_order_release);
+ 		WindowSystem::NotifyGameLoaded();
+ 		std::thread t(_LaunchTitleThread);
+ 		t.detach();
+@@ -912,6 +914,11 @@ namespace CafeSystem
+ 		return sSystemRunning;
+ 	}
+ 
++	extern "C" DLLEXPORT bool milkbar_isTitleActive()
++	{
++		return s_milkbarTitleActive.load(std::memory_order_acquire);
++	}
++
+ 	void PauseTitle()
+ 	{
+ 		if (!sSystemRunning || sTitlePaused)
+@@ -1058,6 +1065,8 @@ namespace CafeSystem
+ 	{
+ 		if(!sSystemRunning)
+ 			return;
++		// MILKBAR_TITLE_LIFETIME
++		s_milkbarTitleActive.store(false, std::memory_order_release);
+         coreinit::OSSchedulerEnd();
+         Latte_Stop();
+         // reset Cafe OS userspace modules
+diff --git a/src/Cafe/OS/RPL/rpl.cpp b/src/Cafe/OS/RPL/rpl.cpp
+index b906b6b..53d965f 100644
+--- a/src/Cafe/OS/RPL/rpl.cpp
++++ b/src/Cafe/OS/RPL/rpl.cpp
+@@ -2050,7 +2050,7 @@ uint32 RPLLoader_GetHandleByModuleName(const char* name)
+ 		if (strcmp(moduleName, dep->modulename) == 0)
+ 		{
+ 			cemu_assert_debug(dep->loadAttempted);
+-			if (!dep->isCafeOSModule && !dep->rplLoaderContext)
++			if (!dep->isCafeOSModule && !dep->rplLoaderContext && !osLib_hasLibrary(moduleName))
+ 				return RPL_INVALID_HANDLE; // module not found
+ 			return dep->coreinitHandle;
+ 		}
+diff --git a/src/Cafe/OS/common/OSCommon.cpp b/src/Cafe/OS/common/OSCommon.cpp
+index 8358e7d..adbfe03 100644
+--- a/src/Cafe/OS/common/OSCommon.cpp
++++ b/src/Cafe/OS/common/OSCommon.cpp
+@@ -57,6 +57,30 @@ typedef struct
+ std::vector<osFunctionEntry_t>* s_osFunctionTable;
+ std::vector<osPointerEntry_t> osDataTable;
+ 
++// MILKBAR_HLE_READY
++static std::atomic_bool s_milkbarHLEReady{false};
++static std::atomic_bool s_milkbarHooksReady{false};
++void milkbar_markHLEReady()
++{
++    s_milkbarHLEReady.store(true, std::memory_order_release);
++}
++extern "C" DLLEXPORT bool milkbar_isHLEReady()
++{
++    return s_milkbarHLEReady.load(std::memory_order_acquire);
++}
++extern "C" DLLEXPORT void milkbar_markHooksReady()
++{
++    s_milkbarHooksReady.store(true, std::memory_order_release);
++}
++void milkbar_waitForHooks()
++{
++    if (const char* enabled = std::getenv("MILKBAR_WAIT_FOR_HOOKS"); !enabled || !*enabled)
++        return;
++    for (int attempt = 0; attempt < 10000 && !s_milkbarHooksReady.load(std::memory_order_acquire); ++attempt)
++        std::this_thread::sleep_for(std::chrono::milliseconds(1));
++}
++
++
+ void osLib_generateHashFromName(const char* name, uint32* hashA, uint32* hashB)
+ {
+ 	uint32 h1 = 0x688BA2BA;
+@@ -107,6 +131,17 @@ extern "C" DLLEXPORT void osLib_registerHLEFunction(const char* libraryName, con
+ 	osLib_addFunctionInternal(libraryName, functionName, osFunction);
+ }
+ 
++bool osLib_hasLibrary(const char* libraryName)
++{
++    if (!s_osFunctionTable)
++        return false;
++    uint32 libHashA, libHashB;
++    osLib_generateHashFromName(libraryName, &libHashA, &libHashB);
++    return std::ranges::any_of(*s_osFunctionTable, [&](const osFunctionEntry_t& entry) {
++        return entry.libHashA == libHashA && entry.libHashB == libHashB;
++    });
++}
++
+ sint32 osLib_getFunctionIndex(const char* libraryName, const char* functionName)
+ {
+ 	uint32 libHashA, libHashB;
+diff --git a/src/Cafe/OS/common/OSCommon.h b/src/Cafe/OS/common/OSCommon.h
+index d35ff89..c60c643 100644
+--- a/src/Cafe/OS/common/OSCommon.h
++++ b/src/Cafe/OS/common/OSCommon.h
+@@ -7,12 +7,15 @@ struct PPCInterpreter_t;
+ 
+ void osLib_generateHashFromName(const char* name, uint32* hashA, uint32* hashB);
+ sint32 osLib_getFunctionIndex(const char* libraryName, const char* functionName);
++bool osLib_hasLibrary(const char* libraryName);
+ uint32 osLib_getPointer(const char* libraryName, const char* functionName);
+ 
+ void osLib_addFunctionInternal(const char* libraryName, const char* functionName, void(*osFunction)(PPCInterpreter_t* hCPU));
+ #define osLib_addFunction(__p1, __p2, __p3) osLib_addFunctionInternal((const char*)__p1, __p2, __p3)
+ void osLib_addVirtualPointer(const char* libraryName, const char* functionName, uint32 vPtr);
+ 
++void milkbar_markHLEReady();
++void milkbar_waitForHooks();
+ void osLib_returnFromFunction(PPCInterpreter_t* hCPU, uint32 returnValue);
+ void osLib_returnFromFunction64(PPCInterpreter_t* hCPU, uint64 returnValue64);
+ 
+diff --git a/src/Cafe/OS/libs/coreinit/coreinit_DynLoad.cpp b/src/Cafe/OS/libs/coreinit/coreinit_DynLoad.cpp
+index 546501b..64c88d7 100644
+--- a/src/Cafe/OS/libs/coreinit/coreinit_DynLoad.cpp
++++ b/src/Cafe/OS/libs/coreinit/coreinit_DynLoad.cpp
+@@ -141,5 +141,7 @@ namespace coreinit
+ 		cafeExportRegister("coreinit", OSDynLoad_Acquire, LogType::Placeholder);
+ 		cafeExportRegister("coreinit", OSDynLoad_Release, LogType::Placeholder);
+ 		cafeExportRegister("coreinit", OSDynLoad_FindExport, LogType::Placeholder);
++		milkbar_markHLEReady();
++		milkbar_waitForHooks();
+ 	}
+ }
+\ No newline at end of file
+diff --git a/src/Common/precompiled.h b/src/Common/precompiled.h
+index a4aab45..53fe58f 100644
+--- a/src/Common/precompiled.h
++++ b/src/Common/precompiled.h
+@@ -376,7 +376,9 @@ inline uint64 _udiv128(uint64 highDividend, uint64 lowDividend, uint64 divisor,
+     #if BOOST_OS_WINDOWS
+         #define DLLEXPORT __attribute__((dllexport))
+     #else
+-        #define DLLEXPORT
++        // Milk Bar loads as a native shared library and resolves Cemu's public
++        // emulator hooks at runtime.
++        #define DLLEXPORT __attribute__((visibility("default")))
+     #endif
+ #else
+     #error No definition for DLLEXPORT

@@ -29,6 +29,19 @@ void namedPipeClass::createServer()
 		this->hPipe = hPipeTemp;
 	}
 #else
+#ifdef __ANDROID__
+    // An in-process socketpair replaces the desktop launcher socket.
+    if (const char* value = std::getenv("HYRULE_IPC_FD")) {
+        char* end = nullptr;
+        long descriptor = std::strtol(value, &end, 10);
+        if (end == value || *end || descriptor < 0 || descriptor > 0x7fffffff)
+            throw std::runtime_error("Invalid Android launcher socket descriptor");
+        this->hPipe = static_cast<SOCKET>(descriptor);
+        unsetenv("HYRULE_IPC_FD");
+        return;
+    }
+    throw std::runtime_error("Android launcher did not provide an IPC socket");
+#endif
     const char* configuredPath = std::getenv("MILKBAR_IPC_PATH");
     const std::string socketPath = configuredPath
         ? configuredPath

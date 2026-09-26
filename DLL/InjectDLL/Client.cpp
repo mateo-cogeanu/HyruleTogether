@@ -1,6 +1,8 @@
 #pragma once
 
+#ifdef _WIN32
 #pragma comment(lib, "ws2_32")
+#endif
 #include "Connectivity.h"
 #include <string>
 
