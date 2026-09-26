@@ -1,4 +1,4 @@
-# Hyrule Together Android proof of concept
+# Hyrule Together Android client
 
 Client-only ARM64 integration targeting the OnePlus 13 running LineageOS 23.2
 (Android 16). The existing desktop dedicated server remains unchanged.
@@ -33,41 +33,55 @@ cd .tools/CemuAndroid/src/android
 ./gradlew :app:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.class=info.cemu.cemu.HyruleSessionTest
 ```
 
-These four checks exercise native-library loading, connection validation,
-rejection of unrecognized games, and launch of the connection dialog. They do
-not simulate BOTW or a multiplayer session.
+The instrumentation suite covers launcher navigation, setup diagnostics, server
+validation and persistence, native library loading, native connection validation,
+title/region/version validation, and synthetic game/update/DLC imports including
+rollback after a read failure. These tests do not establish BOTW playability.
 
-Validated on 2026-09-26: the debug APK built successfully and all four tests
-passed on an ARM64 Android 16 emulator. The installation helper installed and
-opened the app and copied the existing prepared packs. All packaged native
-libraries passed the 16 KiB ELF alignment check, and the APK passed
-`zipalign -c -P 16 4`. The macOS universal native client also rebuilt successfully.
-No physical-device game, graphics-driver, or multiplayer-session test has run.
+## Set up directly on Android
 
-## Device setup
+Install `Build/android/HyruleTogether-debug.apk`, then open Hyrule Together.
+The Android launcher follows the desktop Settings / Lobby Browser / Model
+Selection layout, using the existing backgrounds, logo, and character art.
+It uses native Android controls and adapts to portrait and landscape displays.
 
-Enable USB debugging, connect and authorize the phone, and check `adb devices`.
-Then run:
+1. In **Settings**, enter your player name and choose **Browse — Add BOTW**.
+   Select your decrypted base-game folder containing `code`, `content`, and
+   `meta/meta.xml` (including `code/U-King.rpx`). The app copies the game into
+   its own Cemu storage; you do not need a permanent grant to the original folder.
+2. Choose **Install BOTW Update** and select the matching v208 update folder.
+   **Install BOTW DLC** accepts the matching region's DLC folder. Incorrect
+   titles, regions, and update versions are rejected before copying.
+3. Choose **Import Prepared Multiplayer Packs** and select your existing desktop
+   `graphicPacks` folder containing `BreathOfTheWild_UKMM` and
+   `downloadedGraphicPacks/BreathOfTheWild/Mods/ExtendedMemory`.
+   This imports the prepared mod through the app; ADB is not required.
+4. **Run Setup Check** checks your installed files and player settings.
+   **Manage Cemu Graphic Packs** and **Controller & Emulator Settings** open the
+   corresponding emulator settings.
+5. In **Lobby Browser**, add/edit a saved server or use **Direct IP**. Select the
+   server and connect. Passwords remain in memory for the current app process.
+6. **Model Selection** saves your character choice and passes it to the native
+   multiplayer client when you connect.
 
-```sh
-./scripts/install-android-test.sh
-# Or provide an APK and your existing desktop graphicPacks directory:
-./scripts/install-android-test.sh /path/to/test.apk /path/to/graphicPacks
-```
+Imports report byte progress, allow cancellation, check free space, and stage
+files before replacing a title. The old title remains intact if a copy fails.
+An in-progress import survives activity rotation, but is not resumed after
+Android kills the process. Keep the app open until installation completes.
 
-For multiple devices set `ANDROID_SERIAL`. This helper installs the APK and
-copies only your already-merged `BreathOfTheWild_UKMM` and Extended Memory packs
-into the app's external-files directory. It does not upload them anywhere or
-include them in the APK. Keep base game, update, DLC, and the merged mod region
-consistent; the current client/mod targets BOTW v208. Install your own game data
-through the emulator's title manager. Mod merging on Android is not implemented.
+**Remaining desktop parity gap:** automatic on-device UKMM merging and player
+model generation are not implemented. Multiplayer still requires packs prepared
+by the desktop launcher, matching your game region/update/DLC. The Android UI
+and game importer do not remove that requirement. Encrypted dumps and archive
+imports are not supported by this folder-based setup flow.
 
-Open Hyrule Together, enter the existing desktop server's LAN address and port
-(default 5050), choose a distinct player name, and enable multiplayer. Passwords
-are kept only for the current app process. The connection dialog appears when
-opening the main activity; launching a recognized BOTW title starts the client.
-Required installed packs are enabled automatically. Turning multiplayer off
-removes the multiplayer pack from the active set.
+For development only, `scripts/install-android-test.sh` remains an optional
+ADB installation/pack-copy helper. Set `ANDROID_SERIAL` with multiple devices.
+
+Validated on 2026-09-26: debug APK build and seven ARM64 Android 16 instrumentation
+tests passed. Initial integration also passed native/APK 16 KiB alignment checks
+and a macOS universal native-client rebuild. No physical-device game,
+graphics-driver, or multiplayer-session test has run.
 
 Android storage: `/sdcard/Android/data/app.hyruletogether.android.debug/files`.
 Native multiplayer logs are in private app storage; on this debug build read them
@@ -91,6 +105,6 @@ Connection transitions also appear as toasts and in `adb logcat -s HyruleTogethe
 - An Android build does not establish BOTW playability or multiplayer correctness.
   Physical-device checks must cover game startup, background/resume, disconnect,
   remote spawning/movement, equipment switching, arrows, and sustained performance.
-- The test APK uses Cemu's existing interface plus the connection dialog. A final
-  mobile launcher, automatic mod merging, and an Android server are outside this
-  first integration.
+- The launcher is an Android implementation of the desktop design, not a bundled
+  Python/Qt runtime. Automatic mod merging remains a desktop parity gap; Android
+  server hosting remains outside the requested client scope.

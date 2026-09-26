@@ -77,3 +77,32 @@ text = cmake.read_text()
 if '# HYRULE_DRIVER_ALIGNMENT' not in text:
     text += '\n# HYRULE_DRIVER_ALIGNMENT\nforeach(hook IN ITEMS main_hook file_redirect_hook gsl_alloc_hook hook_impl)\n    target_link_options(${hook} PRIVATE "-Wl,-z,max-page-size=16384")\nendforeach()\n'
     cmake.write_text(text)
+
+# Use the shared desktop launcher layout as the Android entry point.
+for name in ('HyruleLauncherActivity.kt', 'HyruleInstaller.kt'):
+    shutil.copy2(root/'Android/overlay'/name, source/java/name)
+main = source/java/'MainActivity.kt'
+main.write_text(main.read_text().replace('        HyruleSession.settings(this)\n', ''))
+replace(java+'MainActivity.kt', 'startDestination = GameListRoute,',
+        'startDestination = if ((context as android.app.Activity).intent.getStringExtra("hyrule_page") == "packs") GraphicPacksRoute else SettingsRoute,')
+replace(app+'src/main/AndroidManifest.xml',
+        'android:name=".MainActivity"\n            android:exported="true">',
+        'android:name=".HyruleLauncherActivity"\n            android:exported="true">')
+replace(app+'src/main/AndroidManifest.xml', '        <activity\n            android:name=".emulation.EmulationActivity"',
+        '        <activity android:name=".MainActivity" android:exported="false" />\n        <activity\n            android:name=".emulation.EmulationActivity"')
+replace(app+'src/main/AndroidManifest.xml', 'android:parentActivityName=".MainActivity"', 'android:parentActivityName=".HyruleLauncherActivity"')
+launcher = source/app/'src/main/assets/launcher'
+launcher.mkdir(parents=True, exist_ok=True)
+art = root/'WPF .NET 6/Breath of the Wild Multiplayer'
+for name in ('ColoredLogo.png', 'mainWindowBackground.png'):
+    shutil.copy2(art/'Images'/name, launcher/name)
+for name in ('Body', 'Bust'):
+    shutil.copytree(art/'Images'/name, launcher/name, dirs_exist_ok=True)
+shutil.copytree(art/'Backgrounds', launcher/'Backgrounds', dirs_exist_ok=True)
+shutil.copy2(art/'Resources/NpcData.json', launcher/'NpcData.json')
+
+icons = source/app/'src/main/res/drawable'
+icons.mkdir(parents=True, exist_ok=True)
+shutil.copy2(root/'CrossPlatform/icon.png', icons/'hyrule_icon.png')
+replace(app+'src/main/AndroidManifest.xml', 'android:icon="@mipmap/ic_launcher"', 'android:icon="@drawable/hyrule_icon"')
+replace(app+'src/main/AndroidManifest.xml', 'android:roundIcon="@mipmap/ic_launcher_round"', 'android:roundIcon="@drawable/hyrule_icon"')

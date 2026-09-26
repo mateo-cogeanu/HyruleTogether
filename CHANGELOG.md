@@ -4,6 +4,14 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Android launcher and game setup
+
+- Replaced the stock Cemu landing screen and connection popup with Android implementations of the desktop Settings, Lobby Browser, and Model Selection pages, reusing the existing artwork, backgrounds, and icon.
+- Added in-app folder selection and staged installation of decrypted BOTW, v208 updates, and DLC, with title/region validation, free-space checks, byte progress, cancellation, and protection of existing files on failed copies.
+- Added saved server management, direct connections, reachability checks, setup diagnostics, emulator/graphic-pack settings links, and selected-character data in the multiplayer handshake.
+- Added prepared multiplayer-pack import through Android's folder picker; automatic UKMM merging/model generation still requires the desktop launcher.
+- Passed seven Android 16 instrumentation tests covering the launcher, server persistence, JNI checks, metadata validation, title imports, and failed-copy rollback.
+
 ### Android client proof of concept
 
 - Added a pinned Android Cemu integration, ARM64 NDK client build, APK build script, connection dialog, and ADB helper for copying an existing prepared multiplayer pack.

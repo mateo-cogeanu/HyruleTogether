@@ -66,15 +66,18 @@ Java_info_cemu_cemu_HyruleSession_status(JNIEnv* env, jclass) {
 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_info_cemu_cemu_HyruleSession_start(JNIEnv* env, jclass, jstring data,
-        jstring host, jint port, jstring player, jstring password) {
+        jstring host, jint port, jstring player, jstring password, jstring modelType, jstring modelData) {
     const auto directory = fromJava(env, data);
     const auto hostname = fromJava(env, host);
     const auto name = fromJava(env, player);
     const auto secret = fromJava(env, password);
+    const auto type = fromJava(env, modelType);
+    const auto model = fromJava(env, modelData);
     auto safe = [](const std::string& s) { return !s.starts_with("[") && s.find_first_of(";\r\n") == std::string::npos; };
     if (directory.empty() || hostname.empty() || name.empty() || port < 1 || port > 65535 ||
         !safe(hostname) || !safe(name) || !safe(secret) || name.size() > 32 ||
-        hostname.size() > 253 || secret.size() > 128) {
+        hostname.size() > 253 || secret.size() > 128 || (type != "0" && type != "1") ||
+        model.empty() || model.size() > 256 || !safe(model)) {
         setStatus("Invalid server or player settings");
         return JNI_FALSE;
     }
@@ -103,9 +106,9 @@ Java_info_cemu_cemu_HyruleSession_start(JNIEnv* env, jclass, jstring data,
     }
     startClient();
     setStatus("Waiting for BOTW and emulator hooks");
-    std::thread([fd = pair[0], hostname, port, name, secret] {
+    std::thread([fd = pair[0], hostname, port, name, secret, type, model] {
         const std::string connect = "!connect;" + hostname + ";" + std::to_string(port) + ";" +
-            secret + ";" + name + ";Android;0;Jugador1ModelNameLongForASpecificReason:Link;";
+            secret + ";" + name + ";Android;" + type + ";" + model + ";";
         if (command(fd, connect) && command(fd, "!startServerLoop")) {
             setStatus("Connected to " + hostname + ":" + std::to_string(port));
             char message[2048];
