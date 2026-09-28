@@ -4,6 +4,12 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Local desktop synchronization testing
+
+- Paused Android development to prioritize two desktop clients on one machine, followed by Linux testing.
+- Added `scripts/local-multiplayer.py` to prepare independent client profiles and supervise a loopback server plus two clients, with separate saves, logs, IPC sockets, and macOS application identities; existing profiles are protected from overwrite.
+- Verified two macOS Metal clients reach the EU BOTW v208 title screen and connect as distinct players. The five existing server tests pass. Gameplay synchronization remains unverified pending controller-driven save loading; the test procedure records that boundary explicitly.
+
 ### Android launcher and game setup
 
 - Replaced the stock Cemu landing screen and connection popup with Android implementations of the desktop Settings, Lobby Browser, and Model Selection pages, reusing the existing artwork, backgrounds, and icon.
