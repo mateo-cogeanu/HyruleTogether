@@ -4,6 +4,13 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Remote actor duplication fix
+
+- Corrected the Wii U v208 `ActorCreator::eraseActor` hook to read the actor argument from `r4`, rather than the creator in `r3`. Real erases now retire player, projectile, bomb, and enemy references through the existing cleanup paths.
+- Removed premature equipment-refresh completion: returning from `deleteLater` only requests deletion. The client retains the old actor address until the real erase callback before allowing its replacement, preventing extra remote Links and the stale T-pose copy in the tested scene.
+- Added unsampled remote-player create/erase telemetry and two independent lifecycle assertions. Ignored callbacks count toward actor totals; overlaps, missing erases, stale adoption, and missing/stale activity fail. The checker rejects the pre-fix diagnostic run with two actors in A and three in B. All six harness unit tests pass.
+- The updated unattended macOS run passes all 18 checks, including exactly one remote actor per client. Visual inspection of client A shows one clothed remote Link without the extra T-pose copy; computer-use access to B was denied, so visual verification is limited to A. Added a bounded optional inspection pause. A repeat failed before gameplay because A stayed at the title screen; the failed report is retained and startup/input reliability remains unresolved. Android development remains paused.
+
 ### Arrow capture and stronger desktop checks
 
 - Corrected arrow transform resolution for the tested Wii U v208 build: traverse live rigid-body sets to the Havok body, use its translation/current rotation fields, and validate every pointer link. The previous character-controller path is null for arrows; the bomb path followed resource handles.

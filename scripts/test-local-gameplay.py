@@ -95,13 +95,43 @@ def arrow_result(local, remote):
                        ('Remote arrow ID/type was not observed' if not local_types.issubset(remote_types) else 'Matched'))
 
 
+def actor_lifecycle_result(rows, start, end):
+    """Count actual actor callbacks independently of the adopted player address."""
+    active, maximum, overlap = set(), 0, False
+    events = [r for r in rows if r['kind'] in ('actor_create', 'actor_erase') and r['time_ms'] <= end]
+    applied = [r for r in rows if r['kind'] == 'applied' and start <= r['time_ms'] <= end]
+    mismatches = 0
+    # Preserve sink order for callbacks and writes sharing a millisecond.
+    observed = [r for r in rows if
+                (r['kind'] in ('actor_create', 'actor_erase') and r['time_ms'] <= end) or
+                (r['kind'] == 'applied' and start <= r['time_ms'] <= end)]
+    for row in sorted(observed, key=lambda r: r['time_ms']):
+        key = (row['slot'], row['actor'])
+        if row['kind'] == 'actor_create':
+            active.add(key)
+        elif row['kind'] == 'actor_erase':
+            active.discard(key)
+        elif active != {key}:
+            mismatches += 1
+        maximum = max(maximum, len(active))
+        overlap |= len(active) > 1
+    return dict(passed=bool(events) and len(applied) >= 10 and
+                applied[-1]['time_ms'] >= end - 1000 and len(active) == 1 and
+                not overlap and mismatches == 0,
+                remaining_actors=len(active), maximum_actors=maximum,
+                mismatched_applied_samples=mismatches, applied_samples=len(applied))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, default=ROOT / 'Build/local-multiplayer')
     parser.add_argument('--server', type=Path, default=ROOT / 'Build/server' / (('osx' if sys.platform == 'darwin' else 'linux') + ('-arm64' if platform.machine().lower() in ('arm64','aarch64') else '-x64')) / 'MBL.DedicatedServer')
     parser.add_argument('--boot-timeout', type=float, default=240)
     parser.add_argument('--bow-hold', type=float, default=2, help='Seconds to hold a drawn bow before release (increase for visual diagnosis).')
+    parser.add_argument('--inspection-hold', type=float, default=0, help='Optional pause after movement for visual inspection, in seconds (0 to 60).')
     args = parser.parse_args()
+    if not math.isfinite(args.inspection_hold) or not 0 <= args.inspection_hold <= 60:
+        parser.error('--inspection-hold must be between 0 and 60 seconds')
     if not math.isfinite(args.bow_hold) or not 1 <= args.bow_hold <= 30:
         parser.error('--bow-hold must be between 1 and 30 seconds')
     root = args.directory.resolve()
@@ -214,6 +244,7 @@ def main():
                 return readiness_result(rows, time.time()*1000) and live(run / f'{label}.jsonl')
             wait_until(playable, 60, f'{label} continuously unpaused gameplay', alive)
         check('both_games_playable', passed=True)
+        actor_check_start = time.time()*1000
         for label, other in (('a', 'b'), ('b', 'a')):
             start = time.time() * 1000
             action(label,2,ly=-1)
@@ -221,6 +252,9 @@ def main():
             time.sleep(3); alive()
             check(f'{label}_to_{other}_movement', **movement_result(records(run/f'{label}.jsonl','local'),
                   records(run/f'{other}.jsonl','received'), records(run/f'{other}.jsonl','applied'), start,end))
+            if args.inspection_hold:
+                print(f'Visual inspection: client {label} movement finished', flush=True)
+                time.sleep(args.inspection_hold); alive()
             start = time.time() * 1000
             action(label,.3,buttons=['x']); time.sleep(3)
             local = records(run/f'{label}.jsonl','local',start)
@@ -254,6 +288,9 @@ def main():
             check(f'{label}_to_{other}_arrow_actor_updates', passed=len(observed)>=2 and set(observed).issubset(bound),
                   local_arrow_ids=observed, applied_arrow_ids=sorted(bound))
             action(label,.3,buttons=['b']); time.sleep(1)
+        for label in ('a', 'b'):
+            check(f'{label}_single_remote_actor', **actor_lifecycle_result(
+                records(run/f'{label}.jsonl'), actor_check_start, time.time()*1000))
         # Intentional client loss must stop its updates without taking down A or the server.
         victim = next(p for name,p in processes if name == 'b')
         os.killpg(victim.pid,signal.SIGTERM); victim.wait(timeout=10)

@@ -21,6 +21,33 @@ def request(kind, body=b''):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_actor_lifecycle_rejects_ignored_duplicates_and_stale_adoption(self):
+        def event(kind, at, actor):
+            return dict(kind=kind, time_ms=at, actor=actor, slot=1)
+        rows = [event('actor_create', 100, 1), event('actor_erase', 200, 1),
+                event('actor_create', 300, 2)]
+        applied = [event('applied', at, 2) for at in range(400, 2001, 100)]
+        def passed(events, samples=applied):
+            return gameplay.actor_lifecycle_result(events + samples, 400, 2000)['passed']
+        self.assertTrue(passed(rows))
+        # Repeated notification of the same address is not another actor.
+        self.assertTrue(passed(rows + [event('actor_create', 600, 2)]))
+        self.assertFalse(passed(rows + [event('actor_create', 600, 3)]))
+        self.assertFalse(passed(rows + [event('actor_create', 310, 3), event('actor_erase', 350, 3)]))
+        # Even a duplicate erased later must fail while both were present.
+        self.assertFalse(passed(rows + [event('actor_create', 600, 3), event('actor_erase', 800, 3)]))
+        self.assertFalse(passed([r for r in rows if r['kind'] != 'actor_erase']))
+        self.assertFalse(passed(rows + [event('actor_erase', 600, 2)]))
+        self.assertFalse(passed(rows, [event('applied', r['time_ms'], 1) for r in applied]))
+        self.assertFalse(passed([], applied))
+        self.assertFalse(passed(rows, []))
+        self.assertFalse(gameplay.actor_lifecycle_result(rows + applied, 400, 4000)['passed'])
+        # The write before an erase in the same millisecond belongs to the old actor.
+        ordered = rows + [event('applied', 400, 2), event('actor_erase', 400, 2),
+                          event('actor_create', 400, 4)]
+        ordered += [event('applied', at, 4) for at in range(500, 2001, 100)]
+        self.assertTrue(gameplay.actor_lifecycle_result(ordered, 400, 2000)['passed'])
+
     def test_wire_crc_buttons_axes_and_size(self):
         data = pad_packet(7, buttons=['a','zr'], lx=-1, ly=1)
         self.assertEqual(100, len(data))

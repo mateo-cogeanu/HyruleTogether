@@ -66,12 +66,15 @@ backward for two seconds to avoid its nearby cliff; bow aiming turns away from
 overlapping players. Each direction makes up to four draw/fire attempts and
 requires two distinct airborne arrow generations. `--bow-hold 12` extends the
 trigger hold for visual diagnosis (valid range: 1–30 seconds).
+`--inspection-hold 30` adds a bounded pause after each movement check for visual
+inspection (valid range: 0–60 seconds; default: no pause).
 
 Artifacts are stored under `Build/local-multiplayer/runs/<timestamp>/`:
 
 - `report.json`: overall verdict, per-check measurements, input timeline, revision,
   and native-client binary hash. The command exits nonzero on any failed check.
-- `a.jsonl` / `b.jsonl`: opt-in native telemetry sampled at up to 10 Hz per stream.
+- `a.jsonl` / `b.jsonl`: opt-in native telemetry sampled at up to 10 Hz per stream,
+  with every remote-player create/erase event retained without sampling.
 - Client launcher, Cemu, native-client, and dedicated-server logs; input actions are
   also printed as they execute.
 
@@ -85,6 +88,13 @@ coordinates, and matching received ID/type pairs. Separate assertions require
 those IDs to reach live replica position writes. Missing local flight is reported
 separately from missing receipt or replica updates. Disconnect testing checks
 that remote updates cease while the remaining client stays alive.
+
+Two actor-lifecycle checks count unique guest actors from every create/erase
+callback, including callbacks ignored by player adoption. Each client must retain
+exactly one remote actor, never overlap two actors during creation or refresh,
+and apply updates only to that tracked actor. Missing events, stale writes, and
+ignored duplicates cannot pass. This verifies callback lifecycle; it does not
+replace visual review or prove that all meshes belong to a tracked actor.
 
 `HYRULE_TEST_TELEMETRY` enables these diagnostics only when explicitly set by the
 test runner. `readiness` records the game pause state, and `projectile_applied`
@@ -106,13 +116,16 @@ isolation and button release, and rejection of false passes from stationary,
 vertical-only, missing, invalid, or delayed movement data. They also reject stale,
 paused, interrupted readiness data, and arrow passes based only on a nocked arrow,
 one generation, missing peer receipt, an incorrect type, or invalid coordinates.
+Actor tests reject ignored duplicates, transient overlap, missing erasure, stale
+adoption, and missing/stale activity; repeated notifications of the same address
+do not inflate the count.
 
 ## Current evidence — 2026-09-30
 
-- Rebuilt the macOS universal client; all five harness tests pass, including real
+- Rebuilt the macOS universal client; all six harness tests pass, including real
   UDP controller isolation. The earlier five server tests also passed.
 - Two consecutive runs (`runs/20260930-172300/report.json` and
-  `runs/20260930-172556/report.json`) pass all 16 current checks. Both directions
+  `runs/20260930-172556/report.json`) passed all 16 checks available at that point. Both directions
   show movement, jump-animation packets, weapon-data packets, and two airborne
   bomb-arrow generations received and applied to live replicas. Client loss stops
   remote updates while the surviving client and server stay alive.
@@ -126,14 +139,28 @@ one generation, missing peer receipt, an incorrect type, or invalid coordinates.
   take Link over a cliff. The runner now waits for fresh unpaused samples spanning
   at least 2.5 seconds, changes the movement path, and makes bounded bow attempts
   until two airborne generations are observed.
-- Visual observation exposed extra remote Link actors, including a T-pose actor.
-  This remains unresolved and is **not detected by the current passing checks**.
+- Fixed the Wii U v208 erase-hook argument: `ActorCreator::eraseActor(this, actor)`
+  supplies the actor in `r4`; the client previously read the creator in `r3` and
+  missed real erasure. Equipment refresh now retains the old actor until that
+  callback before allowing a replacement.
+- The new lifecycle checker rejects the pre-fix diagnostic run
+  (`runs/20260930-174609`): two remaining actors in A and three in B. The first
+  corrected run (`runs/20260930-175102`) passes its 16 existing checks; replaying
+  its telemetry passes both new uniqueness checks, with one remaining actor each.
+- The updated run (`runs/20260930-175548/report.json`) passes all 18 checks,
+  including both lifecycle assertions. A repeat (`runs/20260930-175929/report.json`)
+  failed its save-loading prerequisite: A remained on the title screen while B
+  loaded. Its failed report is retained; startup/input reliability is unresolved,
+  and no second 18-check pass is claimed.
+- Visual inspection of client A after movement shows one clothed remote Link and
+  no extra T-pose copy. Computer-use access to B was denied, so both-client visual
+  correctness is not claimed.
 - A prior startup animation-address crash did not reproduce in subsequent completed
   runs after the animation-control locking fix. One diagnostic run failed to reach
   healthy gameplay in client A; its failed report is retained.
 
 This is a passing telemetry regression run, not a complete multiplayer verdict.
-Duplicate actors, rendered animation/equipment correctness, projectile collisions
+Rendered animation/equipment correctness beyond the inspected scene, projectile collisions
 and damage, other arrow types, enemy/quest sync, reconnect cleanup, and sustained
 performance still need testing. No Linux or Android gameplay result is claimed.
 

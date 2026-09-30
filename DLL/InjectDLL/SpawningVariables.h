@@ -1185,7 +1185,7 @@ bool setupActorDelete(PPCInterpreter_t* hCPU, TransferableData& trnsData)
 
 	// ksys::act::BaseProc::deleteLater(DeleteReason::_0). This is the same
 	// Wii U entry intercepted by patch_UKL_ActorInterceptor.asm, so the native
-	// actor bookkeeping is cleared as soon as the game accepts the request.
+	// actor bookkeeping is cleared only by the later ActorErase callback.
 	trnsData.fnAddr = 0x0378a374;
 	trnsData.dispatchState = 1;
 	trnsData.enabled = true;
@@ -1301,26 +1301,13 @@ void mainFn(PPCInterpreter_t* hCPU, uint32_t startTrnsData, uint32_t startRingBu
 		}
 		else if (pending_dispatch_kind == PendingDispatchKind::ActorDelete)
 		{
-			// deleteLater has returned to the wrapper, so the old actor must no
-			// longer block its replacement. The real erase hook is asynchronous and
-			// is not emitted by every native Cemu build; finalize our host-side
-			// lifecycle here as well. If OnActorErase already ran, the address check
-			// makes this a no-op.
-			const auto player = Instances::PlayerList.find(pending_delete_player);
-			if (player != Instances::PlayerList.end() &&
-				player->second->baseAddr == pending_delete_actor)
-			{
-				player->second->SpawnPending.store(false, std::memory_order_release);
-				player->second->SpawnCallbackExpected.store(false, std::memory_order_release);
-				player->second->InvalidateNativeAnimationControls();
-				resetRemoteAnimationDispatch(pending_delete_player);
-				player->second->setAddress(0);
-				Logging::LoggerService::LogDebug(
-					"Equipment refresh delete completed for player " +
-					std::to_string(pending_delete_player) +
-					"; replacement spawn enabled.",
-					__FUNCTION__);
-			}
+			// deleteLater only requests deletion. ActorCreator::eraseActor supplies
+			// the actual completion callback; keep the old address until then so
+			// the player thread cannot create a second visible actor.
+			Logging::LoggerService::LogDebug(
+			    "Equipment refresh deletion requested for player " +
+			    std::to_string(pending_delete_player) + "; awaiting actor erase.",
+			    __FUNCTION__);
 		}
 		else if (pending_dispatch_kind == PendingDispatchKind::EquipmentState)
 		{
@@ -1502,6 +1489,9 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 				__FUNCTION__);
 			return;
 		}
+		TestTelemetry::emit("actor_create", spawnedPlayer, [&](auto& json) {
+			json.Key("actor"); json.Uint(hCPU->gpr[3]);
+		}, true);
 		auto player = Instances::PlayerList.find(spawnedPlayer);
 		if (player == Instances::PlayerList.end())
 		{
@@ -1664,8 +1654,10 @@ void OnActorErase(PPCInterpreter_t* hCPU)
 	if (!Game::GameInstance)
 		return;
 
-	std::string name = Memory::read_string(Main::baseAddr + hCPU->gpr[3] + 0x10, 100, __FUNCTION__);
-	ObserveArrowErase(name, hCPU->gpr[3]);
+	// Wii U v208 ActorCreator::eraseActor(this, actor): r3 is the creator,
+	// r4 is the actor. Using r3 silently misses every player/projectile erase.
+	std::string name = Memory::read_string(Main::baseAddr + hCPU->gpr[4] + 0x10, 100, __FUNCTION__);
+	ObserveArrowErase(name, hCPU->gpr[4]);
 
 	std::vector<std::string> BombChoices = {"CustomRemoteBomb", "CustomRemoteBomb2", "CustomRemoteBombCube", "CustomRemoteBombCube2"};
 	std::vector<std::string> RealBombChoices = { "RemoteBomb", "RemoteBomb2", "RemoteBombCube", "RemoteBombCube2" };
@@ -1674,18 +1666,20 @@ void OnActorErase(PPCInterpreter_t* hCPU)
 		int spawnedPlayer = 0;
 		if (!TryParseRemotePlayerActor(name, spawnedPlayer))
 			return;
+		TestTelemetry::emit("actor_erase", spawnedPlayer, [&](auto& json) {
+			json.Key("actor"); json.Uint(hCPU->gpr[4]);
+		}, true);
 		auto player = Instances::PlayerList.find(spawnedPlayer);
 		if (player == Instances::PlayerList.end())
 			return;
 		const bool cleanupActive = stalePlayerCleanupActive.load(std::memory_order_acquire);
-		// A direct refresh can complete host-side before Cemu emits its delayed
-		// erase callback. Never let that stale callback clear a replacement actor
-		// that has already been adopted for the same player slot.
-		if (!cleanupActive && player->second->baseAddr != hCPU->gpr[3])
+		// Ignore erases for an actor that was never adopted by this slot.
+		// Equipment refresh keeps the adopted address until this callback.
+		if (!cleanupActive && player->second->baseAddr != hCPU->gpr[4])
 		{
 			std::stringstream staleEraseStream;
 			staleEraseStream << "Ignored stale erase callback for player " << spawnedPlayer
-				<< " at guest address 0x" << std::hex << hCPU->gpr[3] << ".";
+				<< " at guest address 0x" << std::hex << hCPU->gpr[4] << ".";
 			Logging::LoggerService::LogDebug(staleEraseStream.str(), __FUNCTION__);
 			return;
 		}
@@ -1708,7 +1702,7 @@ void OnActorErase(PPCInterpreter_t* hCPU)
 	}
 
 	if (name.rfind("Enemy_", 0) == 0)
-		Game::GameInstance->EnemyService->UpdateEnemyAddress(Main::baseAddr + hCPU->gpr[3], false);
+		Game::GameInstance->EnemyService->UpdateEnemyAddress(Main::baseAddr + hCPU->gpr[4], false);
 
 	if (!started) return;
 
@@ -1760,7 +1754,7 @@ void OnActorErase(PPCInterpreter_t* hCPU)
 		else if (BombType == 3)
 			Bomb = Instances::PlayerList[j]->BombCube2;
 
-		if (Bomb->BaseAddr == hCPU->gpr[3])
+		if (Bomb->BaseAddr == hCPU->gpr[4])
 		{
 			Bomb->setAddress(0, __FUNCTION__);
 			Bomb->changeState(Deallocated);

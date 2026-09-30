@@ -16,7 +16,8 @@ inline bool enabled() {
     static const bool value = std::getenv("HYRULE_TEST_TELEMETRY") != nullptr;
     return value;
 }
-template<class Build> void emit(const char* kind, int slot, Build build) {
+// Lifecycle events bypass sampling so adjacent create/erase callbacks are retained.
+template<class Build> void emit(const char* kind, int slot, Build build, bool event = false) {
     if (!enabled()) return;
     extern std::mutex sinkMutex;
     extern std::ofstream sinkFile;
@@ -26,7 +27,7 @@ template<class Build> void emit(const char* kind, int slot, Build build) {
     const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
     const std::string key = std::string(kind) + std::to_string(slot);
-    if (now - lastSample[key] < 100) return;
+    if (!event && now - lastSample[key] < 100) return;
     lastSample[key] = now;
     rapidjson::StringBuffer buffer;
     rapidjson::Writer<rapidjson::StringBuffer> json(buffer);
