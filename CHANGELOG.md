@@ -4,6 +4,14 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Automated desktop gameplay tests
+
+- Added a loopback DSU virtual-gamepad driver and unattended two-client regression runner: restores isolated save baselines, loads both games, scripts movement/jump/equipment/bow inputs, tests client loss, restores controller settings, and stops its processes automatically.
+- Added opt-in native JSONL telemetry for local packets, received remote packets, and remote-actor position writes, plus timestamped reports, action traces, binary hashes, and archived logs. Failed prerequisites, missing activity, stale data, and timeouts produce failure rather than an assumed pass.
+- Added real UDP protocol/isolation/release tests and negative cases for the movement checker. Fixed local-runner port preflight to allow immediate reruns after TCP TIME_WAIT.
+- Protected native animation resolution, address checks, writes, and readback against concurrent invalidation during remote-actor equipment refresh after the automated run exposed a startup crash. Two subsequent unattended runs completed without that crash.
+- Recorded the actual regression verdict: the latest macOS run passes 11 of 13 checks, including movement/jump/weapon packets in both directions and disconnect handling; both arrow checks fail because no local shot is captured. A preceding run also failed the received-position threshold in one direction. Visual correctness and sustained stability remain unverified.
+
 ### Local desktop synchronization testing
 
 - Paused Android development to prioritize two desktop clients on one machine, followed by Linux testing.

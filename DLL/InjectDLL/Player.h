@@ -81,7 +81,7 @@ namespace MemoryAccess
 		uint64_t ArchiveAnimAddr = 0;
 		uint64_t ArchiveAttackAddr = 0;
 		uint64_t ArchiveHoldAddr = 0;
-		std::mutex AnimationControlMutex;
+		std::recursive_mutex AnimationControlMutex;
 #endif
 
 		enum ActionEnum
@@ -123,7 +123,7 @@ namespace MemoryAccess
 		void InvalidateNativeAnimationControls()
 		{
 #ifndef _WIN32
-			std::lock_guard<std::mutex> animationControlLock(AnimationControlMutex);
+			std::lock_guard<std::recursive_mutex> animationControlLock(AnimationControlMutex);
 			AnimationControlsResolved.store(false, std::memory_order_release);
 			LastAnimationControlScan = 0;
 			AnimationControlScanLogged = false;
@@ -156,6 +156,12 @@ namespace MemoryAccess
 
 			if (!PlayerData->Updated)
 				return;
+
+#ifndef _WIN32
+			// Actor refresh invalidates these addresses on the emulator thread.
+			// Keep resolution, checks, writes and readback in one critical section.
+			std::lock_guard<std::recursive_mutex> animationControlLock(AnimationControlMutex);
+#endif
 
 			const std::string DEFAULT_ANIM = "Jugador" + std::to_string(PlayerNumber) + "_animationthing";
 			const std::string DEFAULT_ATTACK = "Jugador" + std::to_string(PlayerNumber) + "_AttackAnimation";

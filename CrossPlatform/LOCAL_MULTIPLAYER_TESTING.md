@@ -41,25 +41,85 @@ Inspect `a/LatestLog.txt`, `b/LatestLog.txt`, each client's `launcher.log` and
 `cemu/config/log.txt`, and `server.log` under the test folder. Each new native
 session replaces LatestLog and archives the previous session in that profile.
 
-## Current evidence — 2026-09-28
+## Unattended gameplay regression run
 
-- Rebuilt the macOS universal client and ARM64 dedicated server.
-- Started two isolated ARM64 Metal Cemu processes, both running EU BOTW v208 and
-  DLC 3.0 from the user's own installation.
-- Both reached the title screen, connected to `127.0.0.1:5051`, and received distinct
-  player slots. Both logged discovery of the other player and live EventFlow
-  animation-control addresses.
-- All five existing server tests passed (using .NET 10 major-version roll-forward
-  for the net8.0 test assembly). They cover password decoding, data paths, animation
-  mapping, equipment mode, and binary bow/arrow payloads.
-- Automated keyboard input was unreliable at the game menus. The saved DualSense
-  profile was restored in both test copies. Loading the saves requires controller
-  input before gameplay observations can proceed.
+After preparing the profiles, run:
 
-These checks establish startup and connection only. Movement, animation, equipment,
-projectile rendering, enemy/quest sync, reconnect cleanup, and sustained two-client
-performance remain unverified in this pass. No gameplay synchronization fix is
-claimed from title-screen evidence.
+```sh
+./scripts/build-native.sh
+python3 scripts/test-local-gameplay.py
+```
+
+The runner starts the server and both clients, supplies one loopback DSU virtual
+gamepad per client, navigates Continue, loads the copied saves, waits for live
+player data and remote actors, and exercises movement, jumping, weapon draw,
+bow firing, and client disconnection. It restores controller profiles and stops
+its processes on success, failure, timeout, or interruption. No physical input
+or window focus is required. Avoid opening game dialogs during a run.
+
+Each run restores its private saves from `test-baseline/a` and `test-baseline/b`.
+The baseline is captured from the test profiles on the first run. The original
+launcher saves are never reset or modified. Use a safe outdoor save with a bow,
+arrows, and a melee weapon; missing prerequisites produce a failed check rather
+than an assumed pass. The current fixture is the existing Great Plateau save.
+
+Artifacts are stored under `Build/local-multiplayer/runs/<timestamp>/`:
+
+- `report.json`: overall verdict, per-check measurements, input timeline, revision,
+  and native-client binary hash. The command exits nonzero on any failed check.
+- `a.jsonl` / `b.jsonl`: opt-in native telemetry sampled at up to 10 Hz per stream.
+- Client launcher, Cemu, native-client, and dedicated-server logs.
+
+Movement checks require real horizontal displacement and at least 90% of local
+samples matched at the peer within two seconds: one world unit for received
+positions and two for positions written by the remote-actor update path. Missing,
+stationary, non-finite, or excessively late data cannot pass. Animation, equipment,
+and arrow checks compare observed local events with received data. A missing local
+shot is reported separately from a missing remote shot. Disconnect testing checks
+that remote updates cease while the remaining client stays alive.
+
+`HYRULE_TEST_TELEMETRY` enables these diagnostics only when explicitly set by the
+test runner. The `applied` stream records the current remote actor and the position
+cached by its write path; it does **not** prove the rendered mesh, equipment,
+animation appearance, collision, or arrow physics are correct. Those require
+additional visual or game-state assertions. These are bounded smoke/regression
+checks, not a claim that all multiplayer behavior is covered.
+
+Test the harness itself without Cemu:
+
+```sh
+python3 -m unittest discover -s CrossPlatform/testing -p 'test_*.py' -v
+```
+
+These tests exercise DSU packet CRC/layout, real UDP subscription, controller
+isolation and button release, and rejection of false passes from stationary,
+vertical-only, missing, invalid, or delayed movement data.
+
+## Current evidence — 2026-09-30
+
+- Rebuilt the macOS universal client; the three harness tests pass, including real
+  UDP controller isolation. The earlier five server tests also passed.
+- Two unattended runs loaded the private EU BOTW v208 / DLC 3.0 saves, connected
+  both clients, activated remote actors, exercised all scenarios, and cleaned up.
+- The latest run (`runs/20260930-162501/report.json`) passed 11 of 13 checks:
+  movement, received jump-animation hashes, and received weapon equipment matched
+  in both directions; remote updates stopped after client B exited.
+- Both arrow checks failed: no active local arrow ID was observed. Bow mode did
+  change, but this does not establish that a shot was fired or captured. Inventory,
+  input timing, and local projectile capture still need investigation.
+- The previous run (`runs/20260930-161616/report.json`) additionally failed the
+  B-to-A received-position threshold (74% matched versus the required 90%). Its
+  applied-position comparison passed. Sampling/timing and synchronization behavior
+  need investigation; the threshold has not been relaxed to hide the failure.
+- A preceding startup run crashed while writing an animation control during actor
+  refresh. Resolution, address checks, writes, and readback now share the existing
+  animation-control lock with invalidation. Neither subsequent run reproduced the
+  crash; this is limited repeat-run evidence, not proof of sustained stability.
+
+The overall gameplay verdict remains **failed** until arrow checks pass. Rendered
+models, animation appearance, equipment appearance, projectile physics, enemy/quest
+sync, reconnect cleanup, and sustained performance remain outside these telemetry
+assertions. No Linux or Android gameplay result is claimed.
 
 ## Gameplay pass
 

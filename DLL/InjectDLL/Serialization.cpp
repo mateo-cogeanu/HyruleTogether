@@ -1,6 +1,7 @@
 #include "Serialization.h"
 #include "LoggerService.h"
 #include "EquipmentMode.h"
+#include "TestTelemetry.h"
 #include <sstream>
 #include <map>
 
@@ -362,6 +363,7 @@ DTO::CloseCharacterDTO* Serializer::DeserializeCloseCharacter(std::vector<byte> 
 			__FUNCTION__);
 	}
 
+	TestTelemetry::character("received", result->PlayerNumber, *result);
 	return result;
 }
 
@@ -575,6 +577,7 @@ void Serializer::SerializeWorldData(DTO::WorldDTO* input)
 
 void Serializer::SerializeCharacterData(DTO::ClientCharacterDTO* input)
 {
+	TestTelemetry::character("local", -1, *input);
 	static bool senderLogInitialized = false;
 	static CharacterEquipment lastSentEquipment{};
 	static byte lastSentEquipmentState = 0;

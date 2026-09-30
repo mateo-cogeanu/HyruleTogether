@@ -1,4 +1,5 @@
 #include "Player.h"
+#include "TestTelemetry.h"
 
 using namespace MemoryAccess;
 
@@ -12,7 +13,7 @@ bool Player::ResolveNativeAnimationControls()
 {
 	if (AnimationControlsResolved.load(std::memory_order_acquire))
 		return true;
-	std::lock_guard<std::mutex> animationControlLock(AnimationControlMutex);
+	std::lock_guard<std::recursive_mutex> animationControlLock(AnimationControlMutex);
 	if (AnimationControlsResolved.load(std::memory_order_acquire))
 		return true;
 	if (ArchiveAnimAddr == 0 || ArchiveAttackAddr == 0 || ArchiveHoldAddr == 0)
@@ -347,6 +348,8 @@ void Player::PThread()
 			const float updateRate = this->LowLatency ? 120.0f : 60.0f;
 			const float frameTime = 1000.0f / updateRate;
 			this->Teleport(Helper::Extrapolation::Next(this->Position->LastKnown, this->Speed, (frameTime - FunctionTime) / 1000.0f));
+			if (TestTelemetry::enabled())
+				TestTelemetry::applied(this->PlayerNumber, this->baseAddr, this->Position->LastKnown);
 			this->Bomb->reset();
 			this->Bomb2->reset();
 			this->BombCube->reset();
