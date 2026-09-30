@@ -687,7 +687,7 @@ void Serializer::SerializeQuestData(DTO::QuestDTO* input)
 	{
 		byte StringSize = input->Completed[i].size();
 		copyData(&ClientData[0] + currentIndex, &StringSize, 1);
-		copyData(&ClientData[0] + currentIndex, &input->Completed[i], StringSize);
+		copyData(&ClientData[0] + currentIndex, input->Completed[i].data(), StringSize);
 	}
 }
 

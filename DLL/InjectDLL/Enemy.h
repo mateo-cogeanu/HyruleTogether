@@ -1,3 +1,4 @@
+#pragma once
 #include "Vec3fBE.h"
 #include "Vec3f_Operations.h"
 
@@ -12,6 +13,7 @@ namespace DataTypes
 		BigEndian<int>* Health;
 		Vec3fBE* PrevPos;
 		int CurrentHealth = -1;
+		~Enemy() { delete Health; delete PrevPos; }
 		std::string EnemyType;
 		bool IsSpawned = false;
 		bool IsUpdated = false;
@@ -26,20 +28,22 @@ namespace DataTypes
 
 		void SetHealth(int newHealth) 
 		{
-			if (CurrentHealth == -1 || newHealth < CurrentHealth)
+			if (newHealth >= 0 && (CurrentHealth == -1 || newHealth < CurrentHealth))
 				CurrentHealth = newHealth;
 		}
 
 		int GetHealth(const char* caller)
 		{
+			if (!IsSpawned || !IsSetup) return CurrentHealth;
 			int MemoryHealth = this->Health->get(__FUNCTION__);
+			if (MemoryHealth < 0) return CurrentHealth;
 
 			if (MemoryHealth > CurrentHealth && CurrentHealth != -1)
 			{
 				this->Health->set(CurrentHealth, __FUNCTION__);
 				MemoryHealth = CurrentHealth;
 			}
-			else 
+			else if (CurrentHealth != MemoryHealth)
 			{
 				CurrentHealth = MemoryHealth;
 				IsUpdated = true;
@@ -53,9 +57,8 @@ namespace DataTypes
 
 			if (baseAddress == 0)
 			{
+				// The erase callback may run after health storage is invalid.
 				BaseAddress = 0;
-				if (GetSetup())
-					this->GetHealth(__FUNCTION__);
 				//this->Health = new BigEndian<int>(0, __FUNCTION__);
 				//this->PrevPos = new Vec3fBE(0, __FUNCTION__);
 				this->Health->setAddress(0, __FUNCTION__, false);
@@ -75,6 +78,7 @@ namespace DataTypes
 
 		bool GetSetup()
 		{
+			if (!IsSpawned || BaseAddress == 0) return false;
 			if (this->IsSetup)
 				return true;
 

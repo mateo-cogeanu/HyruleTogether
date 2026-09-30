@@ -1035,9 +1035,10 @@ bool setupEquipmentState(PPCInterpreter_t* hCPU, TransferableData& trnsData,
 		return false;
 	}
 
-	// ChangeWeaponEquipState::oneShot_ notifies the actor after its equipment
-	// children have finished creation. Avoid racing the callback that queued us.
-	if (static_cast<DWORD>(GetTickCount() - queued.queuedAt) < 100)
+	// Defer only while newly created equipment children initialise. Established
+	// actors must not add an artificial delay to every draw/sheath transition.
+	if (static_cast<DWORD>(GetTickCount() -
+		player->second->ActorCreatedAt.load(std::memory_order_acquire)) < 100)
 		return false;
 
 	uint32_t animationController = 0;
@@ -1075,8 +1076,7 @@ bool setupEquipmentState(PPCInterpreter_t* hCPU, TransferableData& trnsData,
 
 	// The local capture and the Jugador actor share the same controller chain.
 	// Populate its verified profile string before the existing 0x2c notification
-	// so BOTW can choose the bow, shield, or melee child instead of receiving only
-	// an indistinguishable Hold boolean. Sheathed and legacy packets deliberately
+	// so BOTW can choose the bow, shield, or melee child. Sheathed and legacy packets deliberately
 	// leave this field alone; the proven Equip/Hold operation still handles them.
 	if (!controllerProfile.empty())
 	{
@@ -1128,10 +1128,11 @@ bool setupEquipmentState(PPCInterpreter_t* hCPU, TransferableData& trnsData,
 			queued.actorAddress + 0xb94, actorState, baseAddress);
 	}
 
-	// Wii U ChangeWeaponEquipState::oneShot_ writes actor+0xb94 (Hold=0,
-	// Equip=1), then calls this controller notification with message 0x2c and
-	// an empty sead::SafeString for NPC-profile actors. Dispatch that exact
-	// operation instead of relying on the unscheduled MultiplayerEvent flow.
+	// Wii U v208 ChangeWeaponEquipState::oneShot_ (0x02333e48) writes
+	// Hold=0, then calls 0x02b41434 with the actor. This resolves the live
+	// equipment profile before setting AS string parameter 0x2c. The previous
+	// path always set that parameter to an empty string, omitting Hold’s helper.
+	// Equip=1 legitimately clears that parameter (0x02333f04).
 	trnsData.f_r3 = static_cast<int>(animationController);
 	trnsData.f_r4 = 0x2c;
 	trnsData.f_r5 = static_cast<int>(safeStringLocation);
@@ -1147,6 +1148,11 @@ bool setupEquipmentState(PPCInterpreter_t* hCPU, TransferableData& trnsData,
 		hCPU->gpr[reg] = 0;
 
 	trnsData.fnAddr = 0x0370ee34;
+	if (held) {
+		trnsData.fnAddr = 0x02b41434;
+		trnsData.f_r3 = static_cast<int>(queued.actorAddress);
+		hCPU->gpr[3] = queued.actorAddress;
+	}
 	trnsData.dispatchState = 1;
 	trnsData.enabled = true;
 	trnsData.interceptRegisters = false;
@@ -1168,6 +1174,10 @@ bool setupEquipmentState(PPCInterpreter_t* hCPU, TransferableData& trnsData,
 		<< Memory::read_bigEndian4BytesOffset(queued.actorAddress + 0xb94, __FUNCTION__)
 		<< ".";
 	Logging::LoggerService::LogInformation(stream.str(), __FUNCTION__);
+	TestTelemetry::emit("equipment_dispatch", queued.playerNumber, [&](auto& json) {
+		json.Key("mode"); json.Int(queued.mode);
+		json.Key("queue_ms"); json.Uint(GetTickCount() - queued.queuedAt);
+	}, true);
 
 	trnsData.ringPtr += sizeof(InstanceData);
 	if (trnsData.ringPtr >= static_cast<int>(endRingBuffer))
@@ -1467,6 +1477,10 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 			", guest=" + std::to_string(hCPU->gpr[3]) +
 			", local equipment mode=" + std::to_string(Game::GameInstance->CurrentEquipmentMode.load()) + ".", __FUNCTION__);
 	}
+	TestTelemetry::emit("world_actor_create", -1, [&](auto& json) {
+		json.Key("name"); json.String(name.c_str());
+		json.Key("actor"); json.Uint(hCPU->gpr[3]);
+	}, true);
 	LogEquipmentChildCreation(name, hCPU->gpr[3]);
 	ObserveArrowCreation(name, hCPU->gpr[3]);
 	if (name.rfind("Weapon_", 0) == 0)
@@ -1552,6 +1566,7 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 
 		player->second->InvalidateNativeAnimationControls();
 		player->second->setAddress(hCPU->gpr[3]);
+		player->second->ActorCreatedAt.store(GetTickCount(), std::memory_order_release);
 		player->second->SpawnPending.store(false, std::memory_order_release);
 		// A replacement may reuse the same guest address. Never let the previous
 		// actor's completed AS request suppress the first animation on this one.

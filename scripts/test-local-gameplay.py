@@ -54,6 +54,21 @@ def readiness_result(rows, now, require_unpaused=True):
             and all(b['time_ms'] - a['time_ms'] <= 300 for a, b in zip(rows, rows[1:])))
 
 
+def fixture_readback(source, peer, kind):
+    """Require a changed value on the same entity after the source write."""
+    if not source:
+        return None
+    change = source[-1]
+    for row in peer:
+        if row['time_ms'] < change['time_ms']:
+            continue
+        if kind == 'quest' and change['before'] == 0 and row['id'] == change['id'] and row['value'] & 1:
+            return row
+        if kind == 'enemy' and change['before'] > change['after'] >= 0 and row['slot'] == change['slot'] and row['health'] == change['after']:
+            return row
+    return None
+
+
 def wait_until(test, seconds, description, alive):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -129,10 +144,15 @@ def main():
     parser.add_argument('--boot-timeout', type=float, default=240)
     parser.add_argument('--bow-hold', type=float, default=2, help='Seconds to hold a drawn bow before release (increase for visual diagnosis).')
     parser.add_argument('--inspection-hold', type=float, default=0, help='Optional pause after movement for visual inspection, in seconds (0 to 60).')
+    parser.add_argument('--scenario-window', type=float, default=0, help='Seconds to accept bounded DSU commands from the run input.jsonl file.')
+    parser.add_argument('--enemy-fixture', action='store_true', help='Synthetic enemy damage replication in isolated saves.')
+    parser.add_argument('--quest-fixture', action='store_true', help='Opt-in synthetic quest flag replication check in isolated saves.')
     parser.add_argument('--spawn-delay-ms', type=int, default=0, help='Delay the first remote-player spawn for the timeout regression fixture (0 to 30000).')
     args = parser.parse_args()
     if not 0 <= args.spawn_delay_ms <= 30000:
         parser.error('--spawn-delay-ms must be between 0 and 30000')
+    if not math.isfinite(args.scenario_window) or not 0 <= args.scenario_window <= 180:
+        parser.error('--scenario-window must be between 0 and 180 seconds')
     if not math.isfinite(args.inspection_hold) or not 0 <= args.inspection_hold <= 60:
         parser.error('--inspection-hold must be between 0 and 60 seconds')
     if not math.isfinite(args.bow_hold) or not 1 <= args.bow_hold <= 30:
@@ -166,7 +186,9 @@ def main():
         probe.bind(('127.0.0.1', ini.getint('Connection', 'Port')))
     run = root / 'runs' / time.strftime('%Y%m%d-%H%M%S')
     run.mkdir(parents=True)
-    result = dict(passed=False, checks=[], controller_type='Wii U GamePad', spawn_delay_ms=args.spawn_delay_ms, scope='Controller-driven game and native synchronization telemetry; visual appearance requires separate review.')
+    result = dict(passed=False, checks=[], controller_type='Wii U GamePad', spawn_delay_ms=args.spawn_delay_ms,
+                  quest_fixture=args.quest_fixture, enemy_fixture=args.enemy_fixture, scenario_window=args.scenario_window,
+                  scope='Controller-driven game and native synchronization telemetry; synthetic fixtures test transport/application. Visual appearance, dialogue, rewards, and shared enemy AI require separate review.')
     result['revision'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     result['native_client_sha256'] = hashlib.sha256(Path(config['client_library']).read_bytes()).hexdigest()
     result['actions'] = []
@@ -215,9 +237,14 @@ def main():
             pads[label] = Gamepad()
             write_profile(profile, pads[label].port)
             shutil.copy2(profile, run/f'{label}-controller.xml')
+            fixture_env = {}
+            if args.enemy_fixture and label == 'a': fixture_env['HYRULE_TEST_ENEMY_SOURCE'] = '1'
+            if args.quest_fixture:
+                fixture_env['HYRULE_TEST_QUEST_NAME'] = 'HatenoMini_CameraBoy_Activated'
+                if label == 'a': fixture_env['HYRULE_TEST_QUEST_SOURCE'] = '1'
             spawn(label, [sys.executable, '-u', str(ROOT / 'CrossPlatform/milkbar_launcher.py'), 'launch'],
                   dict(os.environ, MILKBAR_DATA_DIR=str(client), HYRULE_TEST_TELEMETRY=str(run / f'{label}.jsonl'),
-                       HYRULE_TEST_SPAWN_DELAY_MS=str(args.spawn_delay_ms)))
+                       HYRULE_TEST_SPAWN_DELAY_MS=str(args.spawn_delay_ms), **fixture_env))
         print(f'Artifacts: {run}', flush=True)
         for label in ('a', 'b'):
             wait_until(pads[label].connected.is_set, 30, f'{label} DSU subscription', alive)
@@ -257,6 +284,38 @@ def main():
         # Checking A then waiting for B can leave A's earlier readiness stale.
         wait_until(playable, 60, 'both clients simultaneously ready', alive)
         check('both_games_playable', passed=True)
+        if args.scenario_window:
+            print(f'Scenario input ready: {run / "input.jsonl"}', flush=True)
+            deadline = time.monotonic() + args.scenario_window
+            processed = 0
+            while time.monotonic() < deadline:
+                alive()
+                input_path = run/'input.jsonl'
+                if input_path.exists():
+                    lines = input_path.read_text().splitlines()
+                    for line in lines[processed:]:
+                        command = json.loads(line)
+                        label, duration = command['client'], float(command['duration'])
+                        if label not in pads or not math.isfinite(duration) or not 0 <= duration <= 10:
+                            raise ValueError('Invalid scenario command')
+                        action(label, duration, **command['state'])
+                        processed += 1
+                time.sleep(.1)
+        if args.quest_fixture:
+            def quest_replicated():
+                return fixture_readback(records(run/'a.jsonl', 'quest_fixture_source'),
+                                        records(run/'b.jsonl', 'quest_fixture_readback'), 'quest')
+            wait_until(quest_replicated, 45, 'synthetic quest flag readback on peer', alive)
+            check('synthetic_quest_replication', passed=True,
+                  source=records(run/'a.jsonl', 'quest_fixture_source')[-1],
+                  peer=quest_replicated())
+        if args.enemy_fixture:
+            def enemy_replicated():
+                return fixture_readback(records(run/'a.jsonl', 'enemy_fixture_source'),
+                                        records(run/'b.jsonl', 'enemy_live'), 'enemy')
+            wait_until(enemy_replicated, 45, 'synthetic enemy damage readback on peer', alive)
+            check('synthetic_enemy_damage_replication', passed=True,
+                  source=records(run/'a.jsonl', 'enemy_fixture_source')[-1], peer=enemy_replicated())
         actor_check_start = time.time()*1000
         for label, other in (('a', 'b'), ('b', 'a')):
             wait_until(playable, 60, f'both clients ready before {label} movement', alive)

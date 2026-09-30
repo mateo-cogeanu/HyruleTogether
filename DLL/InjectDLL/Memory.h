@@ -14,6 +14,7 @@
 #include "rapidjson/document.h"
 #include "rapidjson/stringbuffer.h"
 #include <shared_mutex>
+#include <mutex>
 #include "LoggerService.h"
 #include "ClientDTO.h"
 
@@ -257,7 +258,7 @@ namespace Memory
 
                 if (Type == "L" && Value == 0 && newValue > 0x00)
                     changed = true;
-                else if (newValue != Value && (newValue == 0x1 || newValue == 0x17 || newValue == 0x03))
+                else if (Type != "L" && !(Value & 1) && (newValue & 1))
                     changed = true;
 
                 if (beingChanged) return;
@@ -276,8 +277,8 @@ namespace Memory
         uint64_t addingBoolAddress;
         uint64_t addingIntAddress;
         uint64_t addingItemAddress;
-        uint64_t IsGetPlayerStole2Address;
-        uint64_t DungeonClearCounterAddress;
+        uint64_t IsGetPlayerStole2Address = 0;
+        uint64_t DungeonClearCounterAddress = 0;
         int koroksToAdd = 0;
         uint64_t boolFlagAddress;
         uint64_t intFlagAddress;
@@ -286,7 +287,7 @@ namespace Memory
         std::vector<std::string> intsToChange;
         std::vector<std::string> itemsToAdd;
         std::vector<std::string> serverQuests;
-        std::shared_mutex QuestMutex;
+        std::recursive_mutex QuestMutex;
         bool (*IsPaused)();
 
         rapidjson::Document readQuestFlags();

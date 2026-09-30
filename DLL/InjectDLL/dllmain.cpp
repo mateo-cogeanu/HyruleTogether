@@ -78,7 +78,7 @@ std::vector<float> Main::oldLocations[] = {{0, 0, 0}, {0, 0, 0}, {0, 0, 0}, {0, 
 
 HMODULE myhModule;
 
-bool Main::QuestSyncReady = false;
+std::atomic<bool> Main::QuestSyncReady{false};
 
 
 DWORD __stdcall EjectThread(LPVOID lpParameter) {

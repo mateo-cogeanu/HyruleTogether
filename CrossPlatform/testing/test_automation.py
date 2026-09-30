@@ -23,6 +23,20 @@ def request(kind, body=b''):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_fixture_requires_the_same_entity_and_a_readback_after_the_write(self):
+        source = [dict(time_ms=100, before=0, id='V1365')]
+        peer = dict(time_ms=101, id='V1365', value=1)
+        self.assertEqual(peer, gameplay.fixture_readback(source, [peer], 'quest'))
+        for invalid in (dict(peer, time_ms=99), dict(peer, id='V0'), dict(peer, value=0)):
+            self.assertIsNone(gameplay.fixture_readback(source, [invalid], 'quest'))
+        self.assertIsNone(gameplay.fixture_readback([dict(source[0], before=1)], [peer], 'quest'))
+        source = [dict(time_ms=100, before=13, after=7, slot=42)]
+        peer = dict(time_ms=101, slot=42, health=7)
+        self.assertEqual(peer, gameplay.fixture_readback(source, [peer], 'enemy'))
+        for invalid in (dict(peer, time_ms=99), dict(peer, slot=41), dict(peer, health=13)):
+            self.assertIsNone(gameplay.fixture_readback(source, [invalid], 'enemy'))
+        self.assertIsNone(gameplay.fixture_readback([], [peer], 'enemy'))
+
     def test_neutral_warmup_allows_title_pause_but_requires_fresh_samples(self):
         now = 10000
         rows = [dict(time_ms=t, paused=True) for t in range(7100, 10001, 100)]

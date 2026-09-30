@@ -1,4 +1,4 @@
-﻿using BOTWM.Server.DTO;
+using BOTWM.Server.DTO;
 
 namespace BOTWM.Server.ServerClasses
 {
@@ -6,7 +6,7 @@ namespace BOTWM.Server.ServerClasses
     {
         const int CLEARMINUTES = 60;
 
-        public Mutex EMutex = new Mutex();
+        private readonly object EMutex = new();
         public bool isEnemySync;
         private DateTime LastClear;
 
@@ -25,75 +25,78 @@ namespace BOTWM.Server.ServerClasses
 
         public void UpdateServiceStatus(bool newStatus)
         {
-            isEnemySync = newStatus;
+            lock (EMutex) isEnemySync = newStatus;
         }
 
         public void Update(EnemyDTO userData)
         {
-            double TimeSinceLastClear = DateTime.Now.Subtract(LastClear).TotalMinutes;
-
-            if (!isEnemySync || TimeSinceLastClear > CLEARMINUTES)
+            lock (EMutex)
             {
-                ClearEnemyData();
-                return;
+                double TimeSinceLastClear = DateTime.Now.Subtract(LastClear).TotalMinutes;
+                if (!isEnemySync || TimeSinceLastClear > CLEARMINUTES)
+                    ClearEnemyData();
+                if (!isEnemySync) return;
+
+                foreach (EnemyData Enemy in userData.Health)
+                    UpdateEnemyHealth(Enemy.Hash, Enemy.Health);
+
             }
-
-            EMutex.WaitOne(100);
-
-            foreach (EnemyData Enemy in userData.Health)
-                UpdateEnemyHealth(Enemy.Hash, Enemy.Health);
-
-            EMutex.ReleaseMutex();
         }
 
         public void ClearEnemyData()
         {
-            EMutex.WaitOne(100);
+            lock (EMutex)
+            {
 
-            EnemyList.Clear();
-            for (int i = 0; i < Queue.Count; i++)
-                Queue[i].Clear();
+                EnemyList.Clear();
+                for (int i = 0; i < Queue.Count; i++)
+                    Queue[i].Clear();
 
-            LastClear = DateTime.Now;
+                LastClear = DateTime.Now;
 
-            EMutex.ReleaseMutex();
+            }
 
             return;
         }
 
         public void FillQueue(int playerNumber)
         {
-            EMutex.WaitOne(100);
+            lock (EMutex)
+            {
 
-            Queue[playerNumber].Clear();
+                Queue[playerNumber].Clear();
 
-            foreach (KeyValuePair<int, int> kvp in EnemyList)
-                Queue[playerNumber].Add(kvp.Key, kvp.Value);
+                foreach (KeyValuePair<int, int> kvp in EnemyList)
+                    Queue[playerNumber].Add(kvp.Key, kvp.Value);
 
-            EMutex.ReleaseMutex();
+            }
         }
 
         public List<EnemyData> GetQueue(int playerNumber)
         {
             List<EnemyData> Data = new List<EnemyData>();
 
-            EMutex.WaitOne(100);
+            lock (EMutex)
+            {
 
-            foreach(KeyValuePair<int, int> kvp in Queue[playerNumber])
-                Data.Add(new EnemyData(kvp.Key, kvp.Value));
+                foreach (KeyValuePair<int, int> kvp in Queue[playerNumber].Take(200).ToArray())
+                {
+                    Data.Add(new EnemyData(kvp.Key, kvp.Value));
+                    Queue[playerNumber].Remove(kvp.Key);
+                }
 
-            Queue[playerNumber].Clear();
-
-            EMutex.ReleaseMutex();
+            }
 
             return Data;
         }
 
         private void UpdateEnemyHealth(int hash, int health)
         {
+            if (hash == 0 || health < 0) return;
+
             if (!EnemyList.ContainsKey(hash) || (EnemyList.ContainsKey(hash) && EnemyList[hash] > health))
             {
-                EnemyList[hash] = health; // TODO: Make sure that we can add new entries to dictionaries through this method
+                EnemyList[hash] = health;
 
                 for (int i = 0; i < Queue.Count; i++)
                     Queue[i][hash] = health;

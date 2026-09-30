@@ -4,6 +4,18 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Equipment, quest flags, and enemy health
+
+- Use the Wii U v208 Hold equipment helper to resolve the actor's live weapon profile; the previous call cleared the animation parameter instead. Restrict the equipment initialization delay to newly created actors, removing the extra delay on every established draw/sheath transition. Authentic shield attachment timing still needs visual verification.
+- Fix quest serialization to transmit the string's characters rather than the C++ string object. Add a production-serializer regression covering short and heap-backed IDs.
+- Index native quest flags across readable guest allocations using checked v208 boolean/integer layouts; both test clients resolve all 2,986 catalogued flags. Recognize the boolean completion bit while preserving category encoding. Serialize quest queues/scanning with a recursive mutex, initialize optional counter addresses, and stop the worker when the title exits.
+- Gate quest capture/application on stable loaded gameplay so title-screen defaults cannot enter the session. Fix the reversed elapsed-time subtraction and run flag capture every 250 ms. Skip already queued flags without getting stuck on the same queue entry.
+- Enable enemy health updates independently of quest initialization, ignore invalid health, retain the lowest reported health, release erased bindings without reading freed storage, and ignore stale erase callbacks. Health capture/application waits for loaded gameplay; batches retain excess entries beyond the 200-enemy wire limit.
+- Replace timed, unchecked server mutex acquisition in enemy/quest services with scoped locks. Preserve simultaneous updates and retain large enemy backlogs in bounded batches. All ten server tests and nine controller/checker tests pass.
+- Add opt-in isolated-save quest and enemy damage fixtures with peer memory readback. The macOS run `20260930-201751` passes all 21 checks, including quest V1365 replication and Bokoblin health 13→7, plus the existing movement, animation, equipment, arrows, uniqueness, and disconnect checks. These fixtures exercise transport/application, not actual quest dialogue or combat.
+- The final repeat `20260930-202452` also passes all 21 checks after gating enemy memory access during loading/pause and adding same-entity/after-write assertions to the fixture checker. Native universal build and production quest protocol test pass.
+- Add a bounded controller-command window for inspecting inventory drops. A real spear drop was observed creating a new actor; that inspection run subsequently timed out because the inventory was left open. Dropped-item replication, shared enemy movement/AI/attacks, quest rewards/journal behavior, and Linux validation remain unfinished. Android development remains paused.
+
 ### Unattended startup input fix
 
 - Keep both test controllers neutral until native telemetry is fresh and continuous before sending title-screen buttons. Cemu uses its first raw input state as the calibration baseline and filters buttons held then; the previous runner could send A immediately after DSU subscription, before calibration.

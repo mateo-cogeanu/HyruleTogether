@@ -5,6 +5,8 @@
 #include <fstream>
 #include <sstream>
 #include <map>
+#include "TestTelemetry.h"
+#include "dllmain_Functions.h"
 
 using namespace Memory;
 
@@ -36,6 +38,88 @@ rapidjson::Document Quests_class::readQuestFlags()
 
 void Quests_class::scanQuestMemory(std::vector<std::string> QuestsToSync)
 {
+
+#ifndef _WIN32
+    // Native Cemu does not use Windows' eighth memory-region allocation order.
+    // Index the checked Wii U v208 flag layouts in readable guest memory.
+    auto catalogue = readQuestFlags();
+    if (catalogue.HasParseError() || !catalogue.IsObject())
+        throw std::runtime_error("Invalid QuestFlags.txt");
+    std::map<uint32_t, std::string> requested;
+    for (const auto& type : QuestsToSync) {
+        if (!catalogue.HasMember(type.c_str())) continue;
+        const int count = catalogue[type.c_str()].GetInt();
+        numberOfQuests[type] = count;
+        for (int i = 0; i < count; ++i) {
+            const std::string id = type + std::to_string(i);
+            if (!catalogue.HasMember(id.c_str())) continue;
+            const auto& entry = catalogue[id.c_str()];
+            std::istringstream bytes(entry[0].GetString());
+            uint32_t hash = 0, value;
+            for (int n = 0; n < 4; ++n) {
+                if (!(bytes >> std::hex >> value) || value > 255)
+                    throw std::runtime_error("Invalid quest hash: " + id);
+                hash = (hash << 8) | value;
+            }
+            Quest quest{};
+            quest.Type = type; quest.Name = entry[1].GetString();
+            QuestList.emplace(id, quest);
+            requested.emplace(hash, id);
+        }
+    }
+    // Index all readable guest allocations in one pass. Flags are split into
+    // several arrays (including category-encoded koroks); the first array alone
+    // omits most quest stages. Never walk past a mapped region or guest memory.
+    const uint64_t guestBegin = getBaseAddress();
+    const uint64_t guestEnd = guestBegin + 0x100000000ULL;
+    for (uint64_t cursor = guestBegin; cursor < guestEnd;) {
+        MEMORY_BASIC_INFORMATION region{};
+        if (!VirtualQuery(reinterpret_cast<LPCVOID>(cursor), &region, sizeof(region)) || !region.RegionSize)
+            break;
+        const uint64_t begin = std::max(cursor, reinterpret_cast<uint64_t>(region.BaseAddress));
+        const uint64_t end = std::min(guestEnd,
+            reinterpret_cast<uint64_t>(region.BaseAddress) + region.RegionSize);
+        if (end <= cursor) break;
+        if (region.State == MEM_COMMIT && !(region.Protect & (PAGE_GUARD | PAGE_NOACCESS))) {
+            const auto* next = reinterpret_cast<const unsigned char*>(begin);
+            const auto* finish = reinterpret_cast<const unsigned char*>(end);
+            while (finish - next >= 32) {
+                next = static_cast<const unsigned char*>(std::memchr(next, 0x10, finish - next - 31));
+                if (!next) break;
+                if (next[1] == 0x29 && next[2] == 0x84 && (next[3] == 0x10 || next[3] == 0xc8)) {
+                    const bool integer = next[3] == 0xc8;
+                    const size_t offset = integer ? 24 : 8;
+                    uint32_t hash = 0;
+                    for (int i = 0; i < 4; ++i) hash = (hash << 8) | next[offset + i];
+                    const auto found = requested.find(hash);
+                    if (found != requested.end()) {
+                        auto& quest = QuestList.at(found->second);
+                        if (!quest.Address && (quest.Type == "L") == integer) {
+                            quest.Address = reinterpret_cast<uint64_t>(next) + offset - 1;
+                            TestTelemetry::emit("quest_index", -1, [&](auto& json) {
+                                json.Key("id"); json.String(found->second.c_str());
+                                json.Key("name"); json.String(quest.Name.c_str());
+                                json.Key("address"); json.Uint64(quest.Address);
+                                json.Key("value"); json.Uint(next[offset - 1]);
+                            }, true);
+                        }
+                    }
+                    if (integer && hash == 0xe605ce62) DungeonClearCounterAddress = reinterpret_cast<uint64_t>(next) + 20;
+                    if (!integer && hash == 0xfe4d1501) IsGetPlayerStole2Address = reinterpret_cast<uint64_t>(next) + 7;
+                }
+                ++next;
+            }
+        }
+        cursor = end;
+    }
+    for (auto entry = QuestList.begin(); entry != QuestList.end();) {
+        if (!entry->second.Address) entry = QuestList.erase(entry); else ++entry;
+    }
+    totalQuests = static_cast<int>(QuestList.size());
+    Logging::LoggerService::LogInformation("Indexed " + std::to_string(totalQuests) +
+        " native quest flags safely.", __FUNCTION__);
+    return;
+#endif
 
 	rapidjson::Document Quests = readQuestFlags();
 
@@ -204,22 +288,18 @@ void Quests_class::scanQuestMemory(std::vector<std::string> QuestsToSync)
 
 void Quests_class::readQuests()
 {
-	for (auto const& pair : numberOfQuests)
-	{
-		std::string QType = pair.first;
-		int QNumber = pair.second;
-
-		for (int i = 0; i < QNumber; i++)
-		{
-			QuestList[QType + std::to_string(i)].updateValue();
-
-			if (QuestList[QType + std::to_string(i)].changed)
-			{
-				changedQuests.push_back(QType + std::to_string(i));
-				QuestList[QType + std::to_string(i)].changed = false;
-			}
-		}
-	}
+    std::lock_guard<std::recursive_mutex> guard(QuestMutex);
+    for (auto& pair : QuestList) {
+        pair.second.updateValue();
+        if (pair.second.changed) {
+            changedQuests.push_back(pair.first);
+            TestTelemetry::emit("quest_changed", -1, [&](auto& json) {
+                json.Key("id"); json.String(pair.first.c_str());
+                json.Key("value"); json.Uint(pair.second.Value);
+            }, true);
+            pair.second.changed = false;
+        }
+    }
 }
 
 void Quests_class::setup(std::vector<std::string> questServerSettings, bool (*isPausedMethod)())
@@ -238,6 +318,7 @@ void Quests_class::setup(std::vector<std::string> questServerSettings, bool (*is
 
 std::vector<std::string> Quests_class::getChangedQuests()
 {
+    std::lock_guard<std::recursive_mutex> guard(QuestMutex);
 
 	std::vector<std::string> changedCopy = changedQuests;
 	std::vector<std::string> result;
@@ -281,6 +362,7 @@ DTO::QuestDTO* Quests_class::getQuestDTO()
 
 bool Quests_class::updateQuests(bool eventStatus)
 {
+    std::lock_guard<std::recursive_mutex> guard(QuestMutex);
 	bool result = false;
 
 	while (questsToChange.size() > 0)
@@ -290,49 +372,50 @@ bool Quests_class::updateQuests(bool eventStatus)
 		if (!eventStatus)
 			return result;
 
-		if (QuestList.count(questsToChange[0]))
+		const std::string incoming = questsToChange.front();
+		questsToChange.erase(questsToChange.begin());
+		if (QuestList.count(incoming))
 		{
-			//BYTE valueToWrite = QuestList[questsToChange[0]].Type == "K" ? 0x17 : 0x1;
+			//BYTE valueToWrite = QuestList[incoming].Type == "K" ? 0x17 : 0x1;
 
 			BYTE valueToWrite = 0x1;
 
-			if (QuestList[questsToChange[0]].Type == "K")
+			if (QuestList[incoming].Type == "K")
 				valueToWrite = 0x17;
-			else if (QuestList[questsToChange[0]].Type == "C")
-				if (QuestList[questsToChange[0]].Name.find("Clear_Dungeon") != std::string::npos)
+			else if (QuestList[incoming].Type == "C")
+				if (QuestList[incoming].Name.find("Clear_Dungeon") != std::string::npos)
 					valueToWrite = 0x03;
 
-			if (QuestList[questsToChange[0]].Type == "L")
+			if (QuestList[incoming].Type == "L")
 			{
-				if (QuestList[questsToChange[0]].Value == 0x0)
+				if (QuestList[incoming].Value == 0x0)
 				{
-					if (std::count(intsToChange.begin(), intsToChange.end(), QuestList[questsToChange[0]].Name))
+					if (std::count(intsToChange.begin(), intsToChange.end(), QuestList[incoming].Name))
 						continue;
 
-					intsToChange.push_back(QuestList[questsToChange[0]].Name);
-					QuestList[questsToChange[0]].Value = valueToWrite;
-					QuestList[questsToChange[0]].beingChanged = true;
-					serverQuests.push_back(questsToChange[0]);
+					intsToChange.push_back(QuestList[incoming].Name);
+					QuestList[incoming].Value = valueToWrite;
+					QuestList[incoming].beingChanged = true;
+					serverQuests.push_back(incoming);
 				}
 			}
 			else
 			{
-				if (QuestList[questsToChange[0]].Value != valueToWrite)
+				if (!(QuestList[incoming].Value & 1))
 				{
-					if (std::count(boolsToChange.begin(), boolsToChange.end(), QuestList[questsToChange[0]].Name))
+					if (std::count(boolsToChange.begin(), boolsToChange.end(), QuestList[incoming].Name))
 						continue;
 
-					boolsToChange.push_back(QuestList[questsToChange[0]].Name);
-					QuestList[questsToChange[0]].Value = valueToWrite;
-					QuestList[questsToChange[0]].beingChanged = true;
-					serverQuests.push_back(questsToChange[0]);
+					boolsToChange.push_back(QuestList[incoming].Name);
+					QuestList[incoming].Value = valueToWrite;
+					QuestList[incoming].beingChanged = true;
+					serverQuests.push_back(incoming);
 
-					if (QuestList[questsToChange[0]].Type == "K") koroksToAdd++;
+					if (QuestList[incoming].Type == "K") koroksToAdd++;
 				}
 			}
 		}
 
-		questsToChange.erase(questsToChange.begin());
 	}
 
 	return result;
@@ -376,7 +459,7 @@ void Quests_class::changeFlag()
 	int DungeonSeals = 0;
 	std::vector<std::string> ToDeactivate;
 	std::vector<std::string> ParagliderQuests;
-	if (findQuest("FindDungeon_Ready") == "" || findQuest("FindDungeon_Activated") == "" || findQuest("FindDungeon_AllClear") == "" || findQuest("FindDungeon_1stClear") == "")
+	if (findQuest("FindDungeon_Ready") != "" && findQuest("FindDungeon_Activated") != "" && findQuest("FindDungeon_AllClear") != "" && findQuest("FindDungeon_1stClear") != "")
 	{
 		ParagliderQuests.push_back(findQuest("FindDungeon_Ready"));
 		ParagliderQuests.push_back(findQuest("FindDungeon_Activated"));
@@ -386,15 +469,17 @@ void Quests_class::changeFlag()
 
 	Logging::LoggerService::LogInformation("Started flag change service", __FUNCTION__);
 
-	while (true)
+	while (Main::IsCemuTitleActive())
 	{
+        std::unique_lock<std::recursive_mutex> guard(QuestMutex);
+        if (IsPaused()) { guard.unlock(); Sleep(50); continue; }
 		bool resyncParaglider = false;
 
 		for (int i = 0; i < ParagliderQuests.size(); i++)
-			if (QuestList[ParagliderQuests[i]].Value != 1)
+			if (!(QuestList[ParagliderQuests[i]].Value & 1))
 				resyncParaglider = true;
 
-		if (resyncParaglider)
+		if (resyncParaglider && DungeonClearCounterAddress != 0)
 			if (Memory::read_bigEndian4Bytes(DungeonClearCounterAddress, __FUNCTION__) > 3)
 			{
 				boolsToChange.push_back("FindDungeon_Ready");
@@ -407,10 +492,19 @@ void Quests_class::changeFlag()
 		if (addingKorokAddress < 30000 || addingBoolAddress < 30000 || addingIntAddress < 30000 || addingItemAddress < 30000)
 		{
 			Logging::LoggerService::LogError("Failed to find a quest sync flag.");
-			exit(1);
+			return;
 		}
 		
-		while (Memory::read_bytes(addingKorokAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingBoolAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingIntAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingItemAddress, 1, __FUNCTION__)[0] == 0x00) {}
+        TestTelemetry::emit("quest_worker", -1, [&](auto& json) {
+            json.Key("bool_ready"); json.Uint(Memory::read_bytes(addingBoolAddress, 1, __FUNCTION__)[0]);
+            json.Key("int_ready"); json.Uint(Memory::read_bytes(addingIntAddress, 1, __FUNCTION__)[0]);
+            json.Key("korok_ready"); json.Uint(Memory::read_bytes(addingKorokAddress, 1, __FUNCTION__)[0]);
+            json.Key("item_ready"); json.Uint(Memory::read_bytes(addingItemAddress, 1, __FUNCTION__)[0]);
+            json.Key("pending_bools"); json.Uint(boolsToChange.size());
+        });
+		if (Memory::read_bytes(addingKorokAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingBoolAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingIntAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingItemAddress, 1, __FUNCTION__)[0] == 0x00) {
+            guard.unlock(); Sleep(10); continue;
+        }
 
 		for (int i = 0; i < ToDeactivate.size(); i++)
 			QuestList[ToDeactivate[i]].beingChanged = false;
@@ -419,14 +513,14 @@ void Quests_class::changeFlag()
 
 		if (koroksToAdd == 0 && boolsToChange.size() == 0 && intsToChange.size() == 0)
 		{
-			Sleep(50);
+			guard.unlock(); Sleep(50);
 			continue;
 		}
 
 		if (IsPaused())
 		{
 			Logging::LoggerService::LogDebug("Quest sync paused as the game is paused");
-			Sleep(1000);
+			guard.unlock(); Sleep(50);
 			continue;
 		}
 
@@ -464,11 +558,15 @@ void Quests_class::changeFlag()
 				boolsToChange.push_back("Npc_King001_Appear");
 				boolsToChange.push_back("Npc_King001_Disappear");
 
-				if (Memory::read_bytes(IsGetPlayerStole2Address, 1, __FUNCTION__)[0] == 0)
+				if (IsGetPlayerStole2Address != 0 && Memory::read_bytes(IsGetPlayerStole2Address, 1, __FUNCTION__)[0] == 0)
 					itemsToAdd.push_back("PlayerStole2");
 			}
 
-			Memory::write_string(boolFlagAddress, boolsToChange[0], 0x47, __FUNCTION__);
+			TestTelemetry::emit("quest_operation", -1, [&](auto& json) {
+                json.Key("name"); json.String(boolsToChange[0].c_str());
+                json.Key("parameter_address"); json.Uint64(boolFlagAddress);
+            }, true);
+            Memory::write_string(boolFlagAddress, boolsToChange[0], 0x47, __FUNCTION__);
 			Memory::write_byte(addingBoolAddress, 0x00, __FUNCTION__);
 
 			//QuestList[boolsToChange[0]].beingChanged = false;
@@ -515,6 +613,7 @@ void Quests_class::changeFlag()
 
 std::string Quests_class::findQuest(std::string QuestName)
 {
+    std::lock_guard<std::recursive_mutex> guard(QuestMutex);
 	for (auto const& pair : QuestList)
 	{
 
@@ -533,6 +632,7 @@ std::string Quests_class::findQuest(std::string QuestName)
 
 void Quests_class::resyncQuests()
 {
+    std::lock_guard<std::recursive_mutex> guard(QuestMutex);
 	for (int i = 0; i < serverQuests.size(); i++)
 	{
 
@@ -578,7 +678,7 @@ void Quests_class::resyncQuests()
 			else
 			{
 
-				if (QuestList[serverQuests[i]].Value != valueToWrite)
+				if (!(QuestList[serverQuests[i]].Value & 1))
 				{
 
 					if (std::count(boolsToChange.begin(), boolsToChange.end(), QuestList[serverQuests[i]].Name))

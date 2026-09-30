@@ -32,6 +32,7 @@ namespace MemoryAccess
 		ModelData Model = ModelData();
 		int ping = 0;
 		DWORD LastUpdated = 0;
+		std::atomic<DWORD> ActorCreatedAt{0};
 		DWORD LastAttack = 0;
 		int LastAnimation = 0;
 		bool LowLatency = false;

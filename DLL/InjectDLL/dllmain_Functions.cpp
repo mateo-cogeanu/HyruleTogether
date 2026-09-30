@@ -745,21 +745,26 @@ float Main::GetDistance(int playerID, bool includeZAxis)
 
 bool Main::ExternIsPaused()
 {
-    return !Main::IsCemuTitleActive() || Game::GameInstance->IsPaused();
+    return !Main::IsCemuTitleActive() || !Game::GameInstance->WorldReady.load(std::memory_order_acquire) || Game::GameInstance->IsPaused();
 }
 
 void Main::QuestSync()
 {
     if (!Main::IsCemuTitleActive())
         return;
-    Game::GameInstance->QuestService->QuestSyncer->setup(questServerSettings, ExternIsPaused);
+    try {
+        Game::GameInstance->QuestService->QuestSyncer->setup(questServerSettings, ExternIsPaused);
+    } catch (const std::exception& error) {
+        Logging::LoggerService::LogWarning(std::string("Quest sync setup failed: ") + error.what(), __FUNCTION__);
+        return;
+    }
 
     Sleep(5000);
 
     if (!Main::IsCemuTitleActive())
         return;
-    Game::GameInstance->QuestService->QuestSyncer->readQuests();
-
+    // Save data is loaded after this setup thread; capture flags only once
+    // gameplay is active to avoid broadcasting title-screen defaults.
     Main::QuestSyncReady = true;
 
     Memory::MessagerService::AddMessage("Quest sync service started");
@@ -1779,7 +1784,7 @@ void Main::mainServerLoop()
         }
 
         byte serverData[7168];
-        Serialization::Serializer::SerializeClientData(&serverData[0], Game::GameInstance->get(started && QuestSyncReady));
+        Serialization::Serializer::SerializeClientData(&serverData[0], Game::GameInstance->get(started, QuestSyncReady));
 
         DWORD pingTimer = GetTickCount();
 
@@ -2018,7 +2023,7 @@ void Main::mainServerLoop()
                 Instances::PlayerList[i]->Disconnect();
 
         Game::GameInstance->EnemyService->SetServerData(serverResponse->EnemyData);
-        Game::GameInstance->QuestService->SetServerData(serverResponse->QuestData->Completed, Game::GameInstance->IsGamePaused, QuestSyncReady);
+        Game::GameInstance->QuestService->SetServerData(serverResponse->QuestData->Completed, !Game::GameInstance->WorldReady.load(std::memory_order_acquire) || Game::GameInstance->IsPaused(), QuestSyncReady);
     }
 }
 

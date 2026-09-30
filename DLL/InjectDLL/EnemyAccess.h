@@ -1,6 +1,7 @@
 #pragma once
 #include "Vec3fBE.h"
 #include "Enemy.h"
+#include "TestTelemetry.h"
 
 namespace MemoryAccess
 {
@@ -9,6 +10,8 @@ namespace MemoryAccess
 	{
 		std::map<int, Enemy*> EnemyList;
 		std::shared_mutex Mutex;
+        DWORD fixtureStarted = 0;
+        bool fixtureApplied = false;
 
 
 	public:
@@ -30,7 +33,7 @@ namespace MemoryAccess
 			// Process Enemy to obtain healthAddress and hash;
 			if (!EnemyList.count(hash))
 				EnemyList[hash] = new Enemy(created ? baseAddress : 0);
-			else
+			else if (created || EnemyList[hash]->BaseAddress == baseAddress)
 				EnemyList[hash]->SetAddress(created ? baseAddress : 0);
 
 			Mutex.unlock();
@@ -40,6 +43,7 @@ namespace MemoryAccess
 		{
 			Mutex.lock();
 
+			for (auto& pair : EnemyList) delete pair.second;
 			EnemyList.clear();
 
 			Mutex.unlock();
@@ -62,12 +66,15 @@ namespace MemoryAccess
 			Mutex.unlock();
 		}
 
-		DTO::EnemyDTO* UpdateHealth()
+		DTO::EnemyDTO* UpdateHealth(bool paused)
 		{
 			DTO::EnemyDTO* result = new DTO::EnemyDTO();
 			result->Health = {};
+			if (paused) return result;
 
 			Mutex.lock();
+            const bool fixture = TestTelemetry::enabled() && std::getenv("HYRULE_TEST_ENEMY_SOURCE");
+            if (fixture && !paused && !fixtureStarted) fixtureStarted = GetTickCount();
 
 			for (auto const& pair : EnemyList)
 			{
@@ -80,15 +87,30 @@ namespace MemoryAccess
 				if (!LocalEnemy->GetSetup())
 					continue;
 
-				LocalEnemy->GetHealth(__FUNCTION__);
+				if (fixture && !paused && !fixtureApplied && fixtureStarted &&
+                    GetTickCount() - fixtureStarted >= 10000 && LocalHash == -988114952 &&
+                    LocalEnemy->Health->get(__FUNCTION__) == 13) {
+                    LocalEnemy->Health->set(7, __FUNCTION__);
+                    fixtureApplied = true;
+                    TestTelemetry::emit("enemy_fixture_source", LocalHash, [&](auto& json) {
+                        json.Key("before"); json.Int(13); json.Key("after"); json.Int(7);
+                    }, true);
+                }
+                const int health = LocalEnemy->GetHealth(__FUNCTION__);
+				TestTelemetry::emit("enemy_live", LocalHash, [&](auto& json) {
+					json.Key("actor"); json.Uint64(LocalEnemy->BaseAddress);
+					json.Key("name"); json.String(LocalEnemy->EnemyType.c_str());
+					json.Key("health"); json.Int(health);
+					TestTelemetry::position(json, LocalEnemy->PrevPos->get(__FUNCTION__));
+				});
 
-				if (!LocalEnemy->IsUpdated)
+				if (!LocalEnemy->IsUpdated || result->Health.size() >= 200)
 					continue;
 				
-				EnemyData* EnemyToAdd = new EnemyData();
-				EnemyToAdd->Hash = LocalHash;
-				EnemyToAdd->Health = LocalEnemy->CurrentHealth;
-				result->Health.push_back(*EnemyToAdd);
+				EnemyData EnemyToAdd;
+				EnemyToAdd.Hash = LocalHash;
+				EnemyToAdd.Health = LocalEnemy->CurrentHealth;
+				result->Health.push_back(EnemyToAdd);
 				LocalEnemy->IsUpdated = false;
 			}
 
@@ -99,4 +121,3 @@ namespace MemoryAccess
 	};
 
 }
-

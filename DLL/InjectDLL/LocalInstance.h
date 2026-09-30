@@ -105,6 +105,8 @@ namespace MemoryAccess
 		LittleEndian<bool>* NotPaused;
 
 		DWORD LastQuestUpdate = 0;
+		DWORD WorldReadySince = 0;
+		std::atomic<bool> WorldReady{false};
 
 		int playerNumber;
 		PropHunt_Flags propHuntFlags = PropHunt_Flags();
@@ -540,7 +542,7 @@ namespace MemoryAccess
 			return result;
 		}
 
-		DTO::ClientDTO* get(bool ServicesStarted)
+		DTO::ClientDTO* get(bool ServicesStarted, bool questsReady)
 		{
 			DTO::ClientDTO* result = new DTO::ClientDTO();
 
@@ -548,13 +550,23 @@ namespace MemoryAccess
 
 			result->WorldData = this->World->get();
 			result->PlayerData = get_characterData();
+            auto position = result->PlayerData->Position;
+            const bool live = result->PlayerData->Health > 0 &&
+                !result->PlayerData->Location.Map.empty() &&
+                std::isfinite(position.x()) && std::isfinite(position.y()) && std::isfinite(position.z()) &&
+                std::abs(position.x()) + std::abs(position.y()) + std::abs(position.z()) > 10 &&
+                std::abs(position.x()) + std::abs(position.y()) + std::abs(position.z()) < 1000000 && !IsPaused();
+            if (!live) WorldReadySince = 0;
+            else if (!WorldReadySince) WorldReadySince = GetTickCount();
+            WorldReady.store(WorldReadySince && GetTickCount() - WorldReadySince >= 3000,
+                std::memory_order_release);
 			if (ServicesStarted)
 			{
-				result->EnemyData = EnemyService->UpdateHealth(); //TODO: Implement enemy and quest sync
+				result->EnemyData = EnemyService->UpdateHealth(!WorldReady.load(std::memory_order_acquire));
 
-				if (float(LastQuestUpdate - GetTickCount()) > 5000)
+				if (questsReady && WorldReady.load(std::memory_order_acquire) && static_cast<DWORD>(GetTickCount() - LastQuestUpdate) >= 250)
 				{
-					result->QuestData = QuestService->UpdateQuests();
+					result->QuestData = QuestService->UpdateQuests(IsPaused());
 					LastQuestUpdate = GetTickCount();
 				}
 				else

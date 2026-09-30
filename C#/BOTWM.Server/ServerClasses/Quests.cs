@@ -1,10 +1,10 @@
-﻿using BOTWM.Server.DTO;
+using BOTWM.Server.DTO;
 
 namespace BOTWM.Server.ServerClasses
 {
     public class Quests
     {
-        public Mutex QMutex = new Mutex();
+        private readonly object QMutex = new();
 
         public bool isQuestSync;
 
@@ -23,111 +23,93 @@ namespace BOTWM.Server.ServerClasses
 
         public void UpdateServiceStatus(bool newStatus)
         {
-            isQuestSync = newStatus;
+            lock (QMutex) isQuestSync = newStatus;
         }
 
         public void Update(QuestsDTO userData)
         {
 
-            if (!isQuestSync)
+            lock (QMutex)
             {
-                ClearQuests();
-                return;
-            }
-
-            QMutex.WaitOne(100);
-
-            ProcessQuests(userData);
-
-            QMutex.ReleaseMutex();
-
-        }
-
-        public void ProcessQuests(QuestsDTO userData)
-        {
-            foreach(string Quest in userData.Completed)
-            {
-                if (!ServerQuests.Contains(Quest))
-                {
-                    ServerQuests.Add(Quest);
-
-                    for (int i = 0; i < Queue.Count; i++)
-                        Queue[i].Add(Quest);
-                }
-
+                if (!isQuestSync) { ClearQuests(); return; }
+                ProcessQuests(userData);
             }
         }
 
-        public void ProcessQuests(List<string> Quests)
+        public void ProcessQuests(QuestsDTO userData) => ProcessQuests(userData.Completed);
+
+        public void ProcessQuests(List<string> quests)
         {
-            foreach (string Quest in Quests)
+            lock (QMutex)
             {
-                if (!ServerQuests.Contains(Quest))
+                if (!isQuestSync) return;
+                foreach (string quest in quests)
                 {
-                    ServerQuests.Add(Quest);
-
-                    for(int i = 0; i < Queue.Count; i++)
-                        Queue[i].Add(Quest);
+                    if (string.IsNullOrEmpty(quest) || ServerQuests.Contains(quest)) continue;
+                    ServerQuests.Add(quest);
+                    foreach (var queue in Queue) queue.Add(quest);
                 }
-
             }
         }
 
         public void ClearQuests()
         {
-            QMutex.WaitOne(100);
-
-            ServerQuests.Clear();
-
-            for (int i = 0; i < Queue.Count; i++)
+            lock (QMutex)
             {
-                Queue[i].Clear();
-            }
 
-            QMutex.ReleaseMutex();
+                ServerQuests.Clear();
+
+                for (int i = 0; i < Queue.Count; i++)
+                {
+                    Queue[i].Clear();
+                }
+
+            }
         }
 
         public void FillQueue(int playerNumber)
         {
-            QMutex.WaitOne(100);
+            lock (QMutex)
+            {
 
-            Queue[playerNumber].Clear();
+                Queue[playerNumber].Clear();
 
-            foreach(string Quest in ServerQuests)
-                Queue[playerNumber].Add(Quest);
+                foreach (string Quest in ServerQuests)
+                    Queue[playerNumber].Add(Quest);
 
-            QMutex.ReleaseMutex();
+            }
         }
 
         public List<string> GetQuests(int playerNumber)
         {
-            QMutex.WaitOne(100);
+            lock (QMutex)
+            {
 
-            List<string> QuestData = new List<string>(Queue[playerNumber]);
+                List<string> QuestData = new List<string>(Queue[playerNumber]);
 
-            Queue[playerNumber].Clear();
+                Queue[playerNumber].Clear();
 
-            QMutex.ReleaseMutex();
-
-            return QuestData;
+                return QuestData;
+            }
         }
 
         public List<string> GetPlayerQuests(int playerNumber)
         {
             List<string> PlayerQuests = new List<string>();
 
-            QMutex.WaitOne(100);
-
-            for(int i = 0; i < 100; i++)
+            lock (QMutex)
             {
-                if (Queue[playerNumber].Count == 0)
-                    break;
 
-                PlayerQuests.Add(Queue[playerNumber][0]);
-                Queue[playerNumber].RemoveAt(0);
+                for (int i = 0; i < 100; i++)
+                {
+                    if (Queue[playerNumber].Count == 0)
+                        break;
+
+                    PlayerQuests.Add(Queue[playerNumber][0]);
+                    Queue[playerNumber].RemoveAt(0);
+                }
+
             }
-
-            QMutex.ReleaseMutex();
 
             return PlayerQuests;
         }

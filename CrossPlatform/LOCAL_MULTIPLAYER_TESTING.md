@@ -142,8 +142,31 @@ do not inflate the count.
 
 ## Current evidence — 2026-09-30
 
-- The current harness has eight passing tests, including real
-  UDP controller isolation. The earlier five server tests also passed.
+- The current harness has nine passing tests, including real
+  UDP controller isolation and negative fixture readback cases. Ten server tests pass.
+- `python3 scripts/test-local-gameplay.py --quest-fixture --enemy-fixture` enables
+  synthetic writes only in the isolated test clients: A marks quest V1365
+  (`HatenoMini_CameraBoy_Activated`) and reduces a baseline Bokoblin from 13 HP
+  to 7. The checks require the same quest ID/enemy hash in B's memory after A's
+  write. This does not test NPC dialogue, rewards, journal updates, actual hits,
+  enemy AI, or additive simultaneous damage.
+- `runs/20260930-201751/report.json` passes all 21 checks, including both fixtures.
+  Quest replication took approximately 8.4 seconds through the existing event
+  worker; this is functional transport evidence, not seamless quest UX.
+- The final repeat `runs/20260930-202452/report.json` also passes all 21 checks
+  with enemy memory access gated during loading/pause and the stricter fixture
+  checker, which records the matching peer readback in the report.
+- Native quest indexing finds 2,986 flags in each client. Initial capture and
+  event application wait for stable loaded gameplay; enemy health is independent
+  of quest-service readiness. Both services have scoped server locks and bounded
+  queue drains. The existing enemy protocol carries health only, not AI state.
+- `--scenario-window 180` accepts appended JSON lines in the printed run's
+  `input.jsonl`, e.g. `{"client":"a","duration":0.2,"state":{"buttons":["plus"]}}`.
+  Commands use the test DSU controllers; each hold is bounded to ten seconds.
+  Return both games to unpaused gameplay before the window ends, otherwise
+  subsequent readiness checks fail. The inventory-drop inspection
+  `runs/20260930-200416` observed a dropped spear actor but failed this prerequisite
+  with the inventory left open. No dropped-item replication assertion exists yet.
 - Two consecutive runs (`runs/20260930-172300/report.json` and
   `runs/20260930-172556/report.json`) passed all 16 checks available at that point. Both directions
   show movement, jump-animation packets, weapon-data packets, and two airborne

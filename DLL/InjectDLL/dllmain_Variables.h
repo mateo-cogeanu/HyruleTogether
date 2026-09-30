@@ -40,7 +40,7 @@ namespace Main
 	extern Memory::OtherPlayer_class* Jugadores[];
 
 	extern Memory::BombSyncer* BombSync;
-	extern bool QuestSyncReady;
+	extern std::atomic<bool> QuestSyncReady;
 
 	extern std::vector < std::vector<float> > Jugador1Queue;
 	extern std::vector < std::vector<float> > Jugador2Queue;
