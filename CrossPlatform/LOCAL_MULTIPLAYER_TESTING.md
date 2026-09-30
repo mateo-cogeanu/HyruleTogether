@@ -50,11 +50,15 @@ After preparing the profiles, run:
 python3 scripts/test-local-gameplay.py
 ```
 
-The runner starts the server and both clients, supplies one loopback DSU virtual
-gamepad per client, navigates Continue, loads the copied saves, waits for live
-player data, remote actors, and continuously unpaused gameplay, then exercises
-movement, jumping, weapon draw, bow firing, and client disconnection. It restores controller profiles and stops
-its processes on success, failure, timeout, or interruption. No physical input
+The runner starts the server and both clients, supplies each with a loopback DSU
+controller configured as a Wii U GamePad. Both pads remain neutral until native
+telemetry has been fresh and continuous for at least 2.5 seconds, including at the paused title
+screen. This prevents early A presses from becoming Cemu's calibration baseline.
+The runner then navigates Continue, loads the copied saves, waits for live
+player data, remote actors, and continuously unpaused gameplay in both clients
+at the same instant, then exercises movement, jumping, weapon draw, bow firing,
+and client disconnection. Readiness is rechecked before each movement action.
+The runner restores controller profiles and stops its processes on success, failure, timeout, or interruption. No physical input
 or window focus is required. Avoid opening game dialogs during a run.
 
 Each run restores its private saves from `test-baseline/a` and `test-baseline/b`.
@@ -69,10 +73,26 @@ trigger hold for visual diagnosis (valid range: 1–30 seconds).
 `--inspection-hold 30` adds a bounded pause after each movement check for visual
 inspection (valid range: 0–60 seconds; default: no pause).
 
+To exercise the delayed-creation regression beyond the former ten-second retry:
+
+```sh
+python3 scripts/test-local-gameplay.py --spawn-delay-ms 12000
+```
+
+This opt-in fixture delays only the first remote-player spawn per slot, retains
+normal game execution, and adds two assertions that the delay actually occurred.
+The native client ignores `HYRULE_TEST_SPAWN_DELAY_MS` unless test telemetry is
+also enabled. Delay values are bounded to 0–30000 ms. A pending request is no
+longer resubmitted just because ten seconds elapsed; a missing callback still
+fails the runner's bounded remote-actor prerequisite.
+
 Artifacts are stored under `Build/local-multiplayer/runs/<timestamp>/`:
 
 - `report.json`: overall verdict, per-check measurements, input timeline, revision,
-  and native-client binary hash. The command exits nonzero on any failed check.
+  native-client binary hash, emulated controller type, and check timestamps. The command exits
+  nonzero on any failed check.
+- `a-controller.xml` / `b-controller.xml`: the exact generated test profiles,
+  archived before launch and independent of the restored user profiles.
 - `a.jsonl` / `b.jsonl`: opt-in native telemetry sampled at up to 10 Hz per stream,
   with every remote-player create/erase event retained without sampling.
 - Client launcher, Cemu, native-client, and dedicated-server logs; input actions are
@@ -122,7 +142,7 @@ do not inflate the count.
 
 ## Current evidence — 2026-09-30
 
-- Rebuilt the macOS universal client; all six harness tests pass, including real
+- The current harness has eight passing tests, including real
   UDP controller isolation. The earlier five server tests also passed.
 - Two consecutive runs (`runs/20260930-172300/report.json` and
   `runs/20260930-172556/report.json`) passed all 16 checks available at that point. Both directions
@@ -150,8 +170,35 @@ do not inflate the count.
 - The updated run (`runs/20260930-175548/report.json`) passes all 18 checks,
   including both lifecycle assertions. A repeat (`runs/20260930-175929/report.json`)
   failed its save-loading prerequisite: A remained on the title screen while B
-  loaded. Its failed report is retained; startup/input reliability is unresolved,
-  and no second 18-check pass is claimed.
+  loaded. Its failed report is retained. Subsequent startup changes and validation
+  are recorded below.
+- The runner now keeps input neutral through native startup, uses VPAD mappings,
+  and waits for both clients to be ready simultaneously. Cemu calibrates from its
+  first raw input state and filters baseline buttons (`ControllerBase::calibrate`
+  and `update_state`); pressing A before that read can cause it to be ignored
+  permanently. The earlier subscription-only gate did not establish neutral
+  calibration time. The title-screen failure is consistent with this race; the
+  old report does not expose Cemu's internal calibration state.
+- The first VPAD-only diagnostic (`runs/20260930-181149`) loaded both games but
+  failed A's movement check. The sequential readiness check could leave A's
+  previously accepted samples stale while waiting for B. Simultaneous readiness
+  replaces that check, and the diagnostic failure remains recorded.
+- The first neutral-warmup run (`runs/20260930-181849`) loaded both saves, but
+  exposed a second spawn-timing fault: B queued a retry ten seconds after request,
+  while the original was still constructing. Both callbacks arrived, leaving an
+  ignored actor. Its duplicate/missing-sample checks fail and remain recorded.
+  The client now retains pending requests and warns once instead of blindly
+  resubmitting. Readiness is also rechecked before each movement action.
+- The fixed delayed-startup run (`runs/20260930-184510/report.json`) passes all
+  21 checks. The first actor callbacks arrived 17.692 seconds after deferral in A
+  and 16.691 seconds in B; both clients warned that creation was delayed without
+  resubmitting the pending request. Both uniqueness checks pass with one remaining
+  actor, and movement/jump/weapon/arrow/disconnect checks all pass.
+- The following ordinary run (`runs/20260930-184904/report.json`) passes all
+  19 checks with the delay disabled. Both corrected runs load both saves through
+  controller input without UI interaction; their exact VPAD profiles are archived.
+  These are bounded macOS startup/gameplay regressions, not a guarantee against
+  every future timing failure.
 - Visual inspection of client A after movement shows one clothed remote Link and
   no extra T-pose copy. Computer-use access to B was denied, so both-client visual
   correctness is not claimed.

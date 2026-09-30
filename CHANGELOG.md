@@ -4,6 +4,16 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Unattended startup input fix
+
+- Keep both test controllers neutral until native telemetry is fresh and continuous before sending title-screen buttons. Cemu uses its first raw input state as the calibration baseline and filters buttons held then; the previous runner could send A immediately after DSU subscription, before calibration.
+- Use emulated Wii U GamePads with the correct VPAD directional/stick IDs, avoiding Pro Controller connection/extension callbacks. Archive generated profiles and record controller type in each report.
+- Require both clients to satisfy readiness at the same instant; waiting for B after accepting A could leave A's earlier readiness stale. Retained the initial VPAD-only diagnostic, which loaded both saves but failed A's movement check.
+- Removed the blind ten-second remote-spawn retry after a slow startup queued two requests before the first callback arrived. Keep the original request pending and log a delay once; the unattended runner still fails if creation never completes. Added an opt-in first-spawn delay fixture to reproduce this timing case without slowing ordinary sessions.
+- Recheck simultaneous readiness before each movement action, including after earlier bow inputs. The first neutral-warmup diagnostic exposed a delayed duplicate and a missing-sample movement failure; its report remains retained.
+- Passed all 21 checks in the forced-delay macOS run: actor callbacks arrived after 17.692/16.691 seconds without blind resubmission, with one remote actor per client and passing gameplay/disconnect checks in both directions. The following ordinary run passes all 19 checks with the delay disabled; both load both saves without UI interaction.
+- Added neutral-warmup freshness/paused-title tests and VPAD profile mapping coverage. All eight harness tests pass. Android development remains paused.
+
 ### Remote actor duplication fix
 
 - Corrected the Wii U v208 `ActorCreator::eraseActor` hook to read the actor argument from `r4`, rather than the creator in `r3`. Real erases now retire player, projectile, bomb, and enemy references through the existing cleanup paths.

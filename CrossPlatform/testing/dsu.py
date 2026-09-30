@@ -119,7 +119,8 @@ class Gamepad:
 
 def write_profile(path, port):
     root = ET.Element('emulated_controller')
-    ET.SubElement(root, 'type').text = 'Wii U Pro Controller'
+    # BOTW's primary VPAD avoids the Pro Controller connection/extension handshake.
+    ET.SubElement(root, 'type').text = 'Wii U GamePad'
     ET.SubElement(root, 'profile').text = 'Hyrule automated test'
     controller = ET.SubElement(root, 'controller')
     for key, value in dict(api='DSUController', uuid='0', display_name='Hyrule Test Gamepad', ip='127.0.0.1', port=str(port), motion='false').items():
@@ -131,8 +132,8 @@ def write_profile(path, port):
     mappings = ET.SubElement(controller, 'mappings')
     # Cemu Controller.h: button 0..31, axes begin at 38 (positive), 44 (negative).
     mapping = {1:13, 2:14, 3:12, 4:15, 5:10, 6:11, 7:8, 8:9, 9:3, 10:0,
-               12:4, 13:6, 14:7, 15:5, 16:1, 17:2,
-               18:39, 19:45, 20:44, 21:38, 22:41, 23:47, 24:46, 25:40}
+               11:4, 12:6, 13:7, 14:5, 15:1, 16:2,
+               17:39, 18:45, 19:44, 20:38, 21:41, 22:47, 23:46, 24:40}
     for key, value in mapping.items():
         node = ET.SubElement(mappings, 'entry')
         ET.SubElement(node, 'mapping').text = str(key)

@@ -4,11 +4,13 @@ import socket
 import struct
 import sys
 import time
+import tempfile
+import xml.etree.ElementTree as ET
 import unittest
 import zlib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from testing.dsu import Gamepad, packet, pad_packet, valid_request
+from testing.dsu import Gamepad, packet, pad_packet, valid_request, write_profile
 spec = importlib.util.spec_from_file_location('gameplay', Path(__file__).resolve().parents[2] / 'scripts/test-local-gameplay.py')
 gameplay = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gameplay)
@@ -21,6 +23,35 @@ def request(kind, body=b''):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_neutral_warmup_allows_title_pause_but_requires_fresh_samples(self):
+        now = 10000
+        rows = [dict(time_ms=t, paused=True) for t in range(7100, 10001, 100)]
+        self.assertFalse(gameplay.readiness_result(rows, now))
+        self.assertTrue(gameplay.readiness_result(rows, now, require_unpaused=False))
+        self.assertFalse(gameplay.readiness_result(rows, now + 1000, require_unpaused=False))
+        self.assertFalse(gameplay.readiness_result([], now, require_unpaused=False))
+
+    def test_primary_gamepad_profile_uses_vpad_button_and_axis_ids(self):
+        # IDs follow Cemu VPADController.h; Pro Controller has Home at ID 11,
+        # shifting its directional and stick mappings by one.
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'controller0.xml'
+            write_profile(path, 34567)
+            root = ET.parse(path).getroot()
+        self.assertEqual('Wii U GamePad', root.findtext('type'))
+        controller = root.find('controller')
+        self.assertEqual('DSUController', controller.findtext('api'))
+        self.assertEqual('127.0.0.1', controller.findtext('ip'))
+        self.assertEqual('34567', controller.findtext('port'))
+        mapping = {int(e.findtext('mapping')): int(e.findtext('button'))
+                   for e in controller.findall('mappings/entry')}
+        self.assertEqual(13, mapping[1])  # A
+        self.assertEqual(4, mapping[11])  # D-pad up, not Home
+        self.assertEqual(1, mapping[15])  # Left stick click
+        self.assertEqual((39, 45, 44, 38), tuple(mapping[i] for i in range(17, 21)))
+        self.assertEqual((41, 47, 46, 40), tuple(mapping[i] for i in range(21, 25)))
+        self.assertNotIn(25, mapping)  # VPAD ID 25 is microphone, not a stick axis.
+
     def test_actor_lifecycle_rejects_ignored_duplicates_and_stale_adoption(self):
         def event(kind, at, actor):
             return dict(kind=kind, time_ms=at, actor=actor, slot=1)

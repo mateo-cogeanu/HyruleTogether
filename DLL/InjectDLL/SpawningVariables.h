@@ -727,6 +727,26 @@ void setupActor(PPCInterpreter_t* hCPU, TransferableData& trnsData, InstanceData
 				__FUNCTION__);
 			return;
 		}
+		// Opt-in regression fixture: hold only the first player request in the
+		// queue long enough to reproduce the old blind ten-second retry.
+		static const long testDelay = [] {
+			const char* value = std::getenv("HYRULE_TEST_SPAWN_DELAY_MS");
+			if (!TestTelemetry::enabled() || !value) return 0L;
+			char* end = nullptr;
+			const long delay = std::strtol(value, &end, 10);
+			return end && *end == '\0' && delay >= 0 && delay <= 30000 ? delay : 0L;
+		}();
+		if (testDelay > 0)
+		{
+			static std::map<int, DWORD> delayedStarts;
+			const auto entry = delayedStarts.emplace(queuedPlayer, GetTickCount());
+			if (entry.second)
+				TestTelemetry::emit("spawn_deferred", queuedPlayer, [&](auto& json) {
+					json.Key("delay_ms"); json.Int64(testDelay);
+				}, true);
+			if (GetTickCount() - entry.first->second < testDelay)
+				return;
+		}
 	}
 
 

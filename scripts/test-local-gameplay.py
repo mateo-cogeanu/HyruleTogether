@@ -46,11 +46,11 @@ def live(path):
                 10 < distance(samples[-1]['position'], [0, 0, 0]) < 1e6)
 
 
-def readiness_result(rows, now):
+def readiness_result(rows, now, require_unpaused=True):
     rows = [row for row in rows if now - 3000 <= row['time_ms'] <= now]
     return (len(rows) >= 20 and rows[-1]['time_ms'] >= now - 500
             and rows[-1]['time_ms'] - rows[0]['time_ms'] >= 2500
-            and all(not row['paused'] for row in rows)
+            and (not require_unpaused or all(not row['paused'] for row in rows))
             and all(b['time_ms'] - a['time_ms'] <= 300 for a, b in zip(rows, rows[1:])))
 
 
@@ -129,7 +129,10 @@ def main():
     parser.add_argument('--boot-timeout', type=float, default=240)
     parser.add_argument('--bow-hold', type=float, default=2, help='Seconds to hold a drawn bow before release (increase for visual diagnosis).')
     parser.add_argument('--inspection-hold', type=float, default=0, help='Optional pause after movement for visual inspection, in seconds (0 to 60).')
+    parser.add_argument('--spawn-delay-ms', type=int, default=0, help='Delay the first remote-player spawn for the timeout regression fixture (0 to 30000).')
     args = parser.parse_args()
+    if not 0 <= args.spawn_delay_ms <= 30000:
+        parser.error('--spawn-delay-ms must be between 0 and 30000')
     if not math.isfinite(args.inspection_hold) or not 0 <= args.inspection_hold <= 60:
         parser.error('--inspection-hold must be between 0 and 60 seconds')
     if not math.isfinite(args.bow_hold) or not 1 <= args.bow_hold <= 30:
@@ -163,7 +166,7 @@ def main():
         probe.bind(('127.0.0.1', ini.getint('Connection', 'Port')))
     run = root / 'runs' / time.strftime('%Y%m%d-%H%M%S')
     run.mkdir(parents=True)
-    result = dict(passed=False, checks=[], scope='Controller-driven game and native synchronization telemetry; visual appearance requires separate review.')
+    result = dict(passed=False, checks=[], controller_type='Wii U GamePad', spawn_delay_ms=args.spawn_delay_ms, scope='Controller-driven game and native synchronization telemetry; visual appearance requires separate review.')
     result['revision'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     result['native_client_sha256'] = hashlib.sha256(Path(config['client_library']).read_bytes()).hexdigest()
     result['actions'] = []
@@ -176,7 +179,7 @@ def main():
             if process.poll() is not None:
                 raise RuntimeError(f'{name} exited with code {process.returncode}')
     def check(name, **values):
-        result['checks'].append(dict(name=name, **values))
+        result['checks'].append(dict(name=name, time_ms=time.time()*1000, **values))
         print(json.dumps(result['checks'][-1]), flush=True)
     def spawn(name, command, env):
         log = (run / f'{name}.log').open('w'); logs.append(log)
@@ -211,13 +214,22 @@ def main():
             profiles.append((profile, profile.read_bytes() if profile.exists() else None))
             pads[label] = Gamepad()
             write_profile(profile, pads[label].port)
+            shutil.copy2(profile, run/f'{label}-controller.xml')
             spawn(label, [sys.executable, '-u', str(ROOT / 'CrossPlatform/milkbar_launcher.py'), 'launch'],
-                  dict(os.environ, MILKBAR_DATA_DIR=str(client), HYRULE_TEST_TELEMETRY=str(run / f'{label}.jsonl')))
+                  dict(os.environ, MILKBAR_DATA_DIR=str(client), HYRULE_TEST_TELEMETRY=str(run / f'{label}.jsonl'),
+                       HYRULE_TEST_SPAWN_DELAY_MS=str(args.spawn_delay_ms)))
         print(f'Artifacts: {run}', flush=True)
         for label in ('a', 'b'):
             wait_until(pads[label].connected.is_set, 30, f'{label} DSU subscription', alive)
         check('independent_virtual_gamepads', passed=True, ports=[pads[x].port for x in ('a', 'b')])
-        # Input can load the save while optional native signature scans run.
+        # Cemu calibrates on its first input read and masks baseline buttons.
+        # Keep both pads neutral until native telemetry runs continuously; sending
+        # A as soon as DSU subscribes can permanently calibrate A as held.
+        wait_until(lambda: all(readiness_result(records(run/f'{label}.jsonl', 'readiness'),
+                         time.time()*1000, require_unpaused=False) for label in ('a', 'b')),
+                   args.boot_timeout, 'neutral controller warmup', alive)
+        check('neutral_controller_warmup', passed=True)
+        # Start title navigation only after the neutral warmup.
         # Both clients start at Continue; repeated A confirms the latest copied save.
         deadline = time.monotonic() + args.boot_timeout
         loaded = set()
@@ -238,14 +250,16 @@ def main():
             wait_until(lambda: records(run / f'{label}.jsonl', 'applied', time.time()*1000 - 2000), 60, f'{label} remote actor active', alive)
         check('remote_actors_active', passed=True)
         # Actor creation and cached coordinates can precede the loading fade.
-        for label in ('a', 'b'):
-            def playable():
-                rows = records(run / f'{label}.jsonl', 'readiness', time.time()*1000 - 3000)
-                return readiness_result(rows, time.time()*1000) and live(run / f'{label}.jsonl')
-            wait_until(playable, 60, f'{label} continuously unpaused gameplay', alive)
+        def playable():
+            now = time.time()*1000
+            return all(readiness_result(records(run/f'{label}.jsonl', 'readiness'), now)
+                       and live(run/f'{label}.jsonl') for label in ('a', 'b'))
+        # Checking A then waiting for B can leave A's earlier readiness stale.
+        wait_until(playable, 60, 'both clients simultaneously ready', alive)
         check('both_games_playable', passed=True)
         actor_check_start = time.time()*1000
         for label, other in (('a', 'b'), ('b', 'a')):
+            wait_until(playable, 60, f'both clients ready before {label} movement', alive)
             start = time.time() * 1000
             action(label,2,ly=-1)
             end = time.time() * 1000
@@ -291,6 +305,13 @@ def main():
         for label in ('a', 'b'):
             check(f'{label}_single_remote_actor', **actor_lifecycle_result(
                 records(run/f'{label}.jsonl'), actor_check_start, time.time()*1000))
+        if args.spawn_delay_ms:
+            for label in ('a', 'b'):
+                deferred = records(run/f'{label}.jsonl', 'spawn_deferred')
+                created = records(run/f'{label}.jsonl', 'actor_create')
+                elapsed = created[0]['time_ms'] - deferred[0]['time_ms'] if deferred and created else 0
+                check(f'{label}_delayed_spawn_fixture', passed=len(deferred)==1 and elapsed>=args.spawn_delay_ms,
+                      observed_delay_ms=elapsed, requested_delay_ms=args.spawn_delay_ms)
         # Intentional client loss must stop its updates without taking down A or the server.
         victim = next(p for name,p in processes if name == 'b')
         os.killpg(victim.pid,signal.SIGTERM); victim.wait(timeout=10)

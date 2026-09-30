@@ -119,6 +119,7 @@ void Player::PThread()
 	const int SPAWN_LIMITER = 3;
 	bool failedToDelete = false;
 	DWORD LastEquipmentRetry = 0;
+	bool spawnWaitLogged = false;
 
 	std::stringstream startStream;
 	startStream << "Player " << this->PlayerNumber << " thread starting...";
@@ -195,16 +196,20 @@ void Player::PThread()
 
 			if (this->SpawnPending.load(std::memory_order_acquire))
 			{
-				if (float(GetTickCount() - this->SpawnRequestedAt) / 1000.0f <= 10.0f)
-					action = ActSkip;
-				else
+				action = ActSkip;
+				// Queuing and asynchronous creation can both outlast ten seconds.
+				// A timeout does not cancel BOTW's original request; resubmitting it
+				// creates an unpaired actor when both callbacks eventually arrive.
+				if (!spawnWaitLogged && GetTickCount() - this->SpawnRequestedAt > 10000)
 				{
-					this->SpawnPending.store(false, std::memory_order_release);
-					this->SpawnCallbackExpected.store(false, std::memory_order_release);
+					spawnWaitLogged = true;
 					Logging::LoggerService::LogWarning(
-						"Remote actor spawn callback timed out; allowing one retry.", __FUNCTION__);
+						"Remote actor creation is delayed; awaiting the original request without resubmitting.",
+						__FUNCTION__);
 				}
 			}
+			else
+				spawnWaitLogged = false;
 
 			if (action == ActDelete)
 			{
