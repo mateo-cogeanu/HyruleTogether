@@ -1,12 +1,15 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
+#include <cstring>
 #include <mutex>
 #include <string>
 
 #include "ProjectileDTO.h"
 #include "Vec3fBE.h"
 #include "QuaternionBE.h"
+#include "TestTelemetry.h"
 
 namespace DataTypes
 {
@@ -18,6 +21,7 @@ namespace DataTypes
 		ProjectileDTO Get(const char* caller)
 		{
 			std::lock_guard<std::mutex> lock(Mutex);
+			ValidateBoundActorLocked(caller);
 			ProjectileDTO result;
 			result.Id = Id;
 			result.Type = Type;
@@ -26,15 +30,40 @@ namespace DataTypes
 			{
 				result.Position = Position.get(caller);
 				result.Rotation = Rotation.get(caller);
+				float lengthSquared = 0;
+				for (int axis = 0; axis < 3; ++axis) lengthSquared += result.Position[axis]*result.Position[axis];
+				if (!std::isfinite(lengthSquared) || lengthSquared < 1 || lengthSquared > 1e12f) {
+					RetiredRemoteId = Id;
+					SetAddressLocked(0, caller);
+					CurrentState = State::Inactive;
+					result.Active = false;
+					result.Position = Vec3f();
+					result.Rotation = Quaternion();
+				}
 			}
 			return result;
 		}
 
 		bool BeginLocal(uint64_t actorAddress, byte type, const std::string& actorName,
-			const char* caller)
+			const char* caller, Vec3f ownerPosition)
 		{
 			std::lock_guard<std::mutex> lock(Mutex);
 			if (CurrentState == State::Active && BaseAddr == actorAddress)
+				return false;
+			// The body can exist before BOTW sets its world transform. Check the
+			// ownership radius before publishing a generation or replacing a shot.
+			uint64_t body = 0;
+			if (!Memory::TryReadPointers(actorAddress, {0x3A0, 0x2C, 0, 0x14, 0, 0x5C}, body, false))
+				return false;
+			float distanceSquared = 0;
+			for (int axis = 0; axis < 3; ++axis) {
+				uint32_t bits = 0; float coordinate = 0;
+				if (!Memory::TryReadBigEndian4BytesOffset(body + 0x120 + axis*4, bits)) return false;
+				memcpy(&coordinate, &bits, sizeof(coordinate));
+				const float delta = coordinate - ownerPosition[axis];
+				distanceSquared += delta*delta;
+			}
+			if (!std::isfinite(distanceSquared) || distanceSquared > 144.0f)
 				return false;
 			// Track the newest shot. Older local arrows remain normal BOTW actors;
 			// their remote replicas likewise continue under BOTW physics after the
@@ -120,15 +149,15 @@ namespace DataTypes
 			Position.set(PendingPosition, caller);
 			Rotation.set(PendingRotation, caller);
 			CurrentState = State::Active;
-			ExpectedName.clear();
 			return true;
 		}
 
-		void UpdateRemote(const ProjectileDTO& projectile, const char* caller)
+		void UpdateRemote(const ProjectileDTO& projectile, const char* caller, int slot = -1)
 		{
 			std::lock_guard<std::mutex> lock(Mutex);
 			if (projectile.Id != Id)
 				return;
+			ValidateBoundActorLocked(caller);
 			if (!projectile.Active)
 			{
 				if (CurrentState == State::Processing)
@@ -147,6 +176,12 @@ namespace DataTypes
 			{
 				Position.set(projectile.Position, caller);
 				Rotation.set(projectile.Rotation, caller);
+				TestTelemetry::emit("projectile_applied", slot, [&](auto& json) {
+					json.Key("arrow_id"); json.Int(Id);
+					json.Key("arrow_type"); json.Int(Type);
+					json.Key("actor"); json.Uint64(BaseAddr);
+					TestTelemetry::position(json, Position.get(caller), "arrow_position");
+				});
 			}
 		}
 
@@ -176,21 +211,39 @@ namespace DataTypes
 		}
 
 	private:
+		void ValidateBoundActorLocked(const char* caller)
+		{
+			if (CurrentState != State::Active || BaseAddr == 0) return;
+			uint64_t body = 0;
+			if (!Memory::TryReadPointers(BaseAddr, {0x3A0, 0x2C, 0, 0x14, 0, 0x5C}, body, true) ||
+				body != BodyAddr || Memory::read_string(Memory::getBaseAddress() + BaseAddr + 0x10,
+					ExpectedName.size() + 1, caller) != ExpectedName) {
+				RetiredRemoteId = Id;
+				SetAddressLocked(0, caller);
+				CurrentState = State::Inactive;
+			}
+		}
+
 		void SetAddressLocked(uint64_t addr, const char* caller)
 		{
 			BaseAddr = 0;
+			BodyAddr = 0;
 			if (addr == 0)
 			{
 				Position.setAddress(0, caller);
 				Rotation.setAddress(0, caller);
 				return;
 			}
-			const uint64_t positionAddress =
-				Memory::ReadPointers(addr, {0x3A0, 0x50, 0x4, 0x80, 0x0, 0x5C, 0x18}, true) + 0x50;
-			if (positionAddress < 30000)
+			uint64_t transformAddress = 0;
+			// Wii U v208: Physics::InstanceSet -> first RigidBodySet -> first
+			// RigidBody -> hkpRigidBody. 0x4C is a resource-handle array;
+			// 0x50 is the character controller and is null for arrows.
+			if (!Memory::TryReadPointers(addr, {0x3A0, 0x2C, 0, 0x14, 0, 0x5C}, transformAddress, true))
 				return;
-			Position.setAddress(positionAddress, caller, true);
-			Rotation.setAddress(positionAddress - 0x30, caller, false);
+			// Havok motion-state transform translation and current swept rotation.
+			Position.setAddress(transformAddress + 0x120, caller, true);
+			Rotation.setAddress(transformAddress + 0x160, caller, false);
+			BodyAddr = transformAddress;
 			BaseAddr = addr;
 		}
 
@@ -200,6 +253,7 @@ namespace DataTypes
 		Vec3f PendingPosition;
 		Quaternion PendingRotation;
 		uint64_t BaseAddr = 0;
+		uint64_t BodyAddr = 0;
 		int Id = 0;
 		int RetiredRemoteId = 0;
 		byte Type = 0;

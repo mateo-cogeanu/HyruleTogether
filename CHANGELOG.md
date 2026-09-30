@@ -4,19 +4,26 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Arrow capture and stronger desktop checks
+
+- Corrected arrow transform resolution for the tested Wii U v208 build: traverse live rigid-body sets to the Havok body, use its translation/current rotation fields, and validate every pointer link. The previous character-controller path is null for arrows; the bomb path followed resource handles.
+- Deferred local capture until the arrow has an initialized position within the ownership radius, removed erased/reused candidates, and stopped streaming when actor/body identity or world coordinates become invalid. Inactive packets no longer carry invalid positions.
+- Added unpaused-gameplay readiness checks and a safer Great Plateau movement/aiming script, plus bounded bow attempts requiring two airborne generations, matching peer ID/type pairs, and live replica position readback. Added negative arrow/readiness tests and configurable bow holds for diagnosis.
+- Passed all 16 checks in two consecutive unattended macOS runs, including bomb-arrow flight/receipt/replica updates in both directions; all five harness unit tests pass. Visual observation also exposed extra remote Link/T-pose actors, which remain unresolved and outside the current passing assertions. Android work remains paused.
+
 ### Automated desktop gameplay tests
 
 - Added a loopback DSU virtual-gamepad driver and unattended two-client regression runner: restores isolated save baselines, loads both games, scripts movement/jump/equipment/bow inputs, tests client loss, restores controller settings, and stops its processes automatically.
 - Added opt-in native JSONL telemetry for local packets, received remote packets, and remote-actor position writes, plus timestamped reports, action traces, binary hashes, and archived logs. Failed prerequisites, missing activity, stale data, and timeouts produce failure rather than an assumed pass.
 - Added real UDP protocol/isolation/release tests and negative cases for the movement checker. Fixed local-runner port preflight to allow immediate reruns after TCP TIME_WAIT.
 - Protected native animation resolution, address checks, writes, and readback against concurrent invalidation during remote-actor equipment refresh after the automated run exposed a startup crash. Two subsequent unattended runs completed without that crash.
-- Recorded the actual regression verdict: the latest macOS run passes 11 of 13 checks, including movement/jump/weapon packets in both directions and disconnect handling; both arrow checks fail because no local shot is captured. A preceding run also failed the received-position threshold in one direction. Visual correctness and sustained stability remain unverified.
+- Recorded the actual regression verdict: the initial macOS run passes 11 of 13 checks, including movement/jump/weapon packets in both directions and disconnect handling; both arrow checks fail because no local shot is captured. A preceding run also failed the received-position threshold in one direction. Visual correctness and sustained stability remain unverified.
 
 ### Local desktop synchronization testing
 
 - Paused Android development to prioritize two desktop clients on one machine, followed by Linux testing.
 - Added `scripts/local-multiplayer.py` to prepare independent client profiles and supervise a loopback server plus two clients, with separate saves, logs, IPC sockets, and macOS application identities; existing profiles are protected from overwrite.
-- Verified two macOS Metal clients reach the EU BOTW v208 title screen and connect as distinct players. The five existing server tests pass. Gameplay synchronization remains unverified pending controller-driven save loading; the test procedure records that boundary explicitly.
+- Verified two macOS Metal clients reach the EU BOTW v208 title screen and connect as distinct players. The five existing server tests pass. Gameplay synchronization was unverified at that initial title-screen stage; subsequent unattended gameplay results are recorded above.
 
 ### Android launcher and game setup
 

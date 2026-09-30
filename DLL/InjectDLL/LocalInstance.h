@@ -3,8 +3,11 @@
 #include "Actor.h"
 #include "EquipmentMode.h"
 #include "ProjectileAccess.h"
+#include "TestTelemetry.h"
 
 using namespace DataTypes;
+
+void pollLocalArrowCandidates();
 
 namespace MemoryAccess
 {
@@ -585,6 +588,9 @@ namespace MemoryAccess
 		DTO::ClientCharacterDTO* get_characterData()
 		{
 			DTO::ClientCharacterDTO* result = new DTO::ClientCharacterDTO();
+			TestTelemetry::emit("readiness", -1, [&](auto& json) {
+				json.Key("paused"); json.Bool(IsPaused());
+			});
 
 			result->Position = this->Position->get(__FUNCTION__);
 			result->Rotation1 = this->Rotation1->get(__FUNCTION__);
@@ -660,6 +666,7 @@ namespace MemoryAccess
 			result->Bomb2 = this->Bomb2->get(__FUNCTION__);
 			result->BombCube = this->BombCube->get(__FUNCTION__);
 			result->BombCube2 = this->BombCube2->get(__FUNCTION__);
+			pollLocalArrowCandidates();
 			result->Arrow = this->Arrow->Get(__FUNCTION__);
 
 			return result;

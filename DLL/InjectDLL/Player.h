@@ -582,7 +582,7 @@ namespace MemoryAccess
 
 		void ManageArrow(const ProjectileDTO& projectile)
 		{
-			Arrow->UpdateRemote(projectile, __FUNCTION__);
+			Arrow->UpdateRemote(projectile, __FUNCTION__, PlayerNumber);
 			if (!projectile.Active || projectile.Id <= 0)
 				return;
 
@@ -597,7 +597,7 @@ namespace MemoryAccess
 				{
 					ProjectileDTO cancelled = projectile;
 					cancelled.Active = false;
-					Arrow->UpdateRemote(cancelled, __FUNCTION__);
+					Arrow->UpdateRemote(cancelled, __FUNCTION__, PlayerNumber);
 					return;
 				}
 				queueRemoteArrowClaim(PlayerNumber, projectile.Id, actorName);

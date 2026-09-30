@@ -13,6 +13,7 @@
 #include "dllmain_Variables.h"
 #include "Entities.h"
 #include "Game.h"
+#include "TestTelemetry.h"
 
 // This stuff here was yoinked from BetterVR
 // -----------------------------------------
@@ -360,6 +361,41 @@ void queueRemoteArrowClaim(
 		{playerNumber, generation, actorName, GetTickCount()});
 }
 
+// Actor creation precedes Havok transform initialization. Keep a short-lived
+// candidate until the local sampling thread can resolve it, or the erase hook
+// invalidates it. This also allows equipment-mode sampling to catch up.
+struct LocalArrowCandidate {
+	std::string name;
+	uint32_t address;
+	byte type;
+	DWORD created;
+};
+std::mutex local_arrow_candidate_mutex;
+std::vector<LocalArrowCandidate> localArrowCandidates;
+
+void pollLocalArrowCandidates()
+{
+	std::lock_guard<std::mutex> lock(local_arrow_candidate_mutex);
+	const DWORD now = GetTickCount();
+	for (auto it = localArrowCandidates.begin(); it != localArrowCandidates.end();)
+	{
+		if (static_cast<DWORD>(now - it->created) > 35000) {
+			Logging::LoggerService::LogDebug("Local arrow candidate expired before transform binding: " + it->name, __FUNCTION__);
+			it = localArrowCandidates.erase(it);
+			continue;
+		}
+		if (Game::GameInstance->CurrentEquipmentMode.load(std::memory_order_acquire) != EquipmentBow ||
+			!Game::GameInstance->Arrow->BeginLocal(it->address, it->type, it->name, __FUNCTION__, Game::GameInstance->Position->LastKnown)) {
+			++it;
+			continue;
+		}
+		ProjectileDTO projectile = Game::GameInstance->Arrow->Get(__FUNCTION__);
+		Logging::LoggerService::LogInformation("Captured local arrow id=" + std::to_string(projectile.Id) +
+			", actor=" + it->name + ", guest=" + std::to_string(it->address) + ".", __FUNCTION__);
+		it = localArrowCandidates.erase(it);
+	}
+}
+
 void ObserveArrowCreation(const std::string& name, uint32_t actorAddress)
 {
 	byte type = 0;
@@ -418,32 +454,14 @@ void ObserveArrowCreation(const std::string& name, uint32_t actorAddress)
 		return;
 	}
 
-	if (Game::GameInstance->CurrentEquipmentMode.load(std::memory_order_acquire) !=
-		EquipmentBow)
+	if (Game::GameInstance->CurrentEquipmentMode.load(std::memory_order_acquire) != EquipmentBow)
 		return;
-	if (!Game::GameInstance->Arrow->BeginLocal(actorAddress, type, name, __FUNCTION__))
-		return;
-
-	ProjectileDTO projectile = Game::GameInstance->Arrow->Get(__FUNCTION__);
-	Vec3f linkPosition = Game::GameInstance->Position->get(__FUNCTION__);
-	const float dx = projectile.Position.x() - linkPosition.x();
-	const float dy = projectile.Position.y() - linkPosition.y();
-	const float dz = projectile.Position.z() - linkPosition.z();
-	const float distanceSquared = dx * dx + dy * dy + dz * dz;
-	if (distanceSquared > 144.0f)
-	{
-		Game::GameInstance->Arrow->EndLocal(actorAddress);
-		Logging::LoggerService::LogDebug(
-			"Rejected non-local arrow candidate outside Link ownership radius: " + name,
-			__FUNCTION__);
-		return;
-	}
-
-	std::stringstream stream;
-	stream << "Captured local arrow id=" << projectile.Id << ", actor=" << name
-		<< ", guest=0x" << std::hex << actorAddress << std::dec
-		<< ", distance=" << std::sqrt(distanceSquared) << ".";
-	Logging::LoggerService::LogInformation(stream.str(), __FUNCTION__);
+	std::lock_guard<std::mutex> lock(local_arrow_candidate_mutex);
+	// A reused actor address still represents a new generation.
+	Game::GameInstance->Arrow->EndLocal(actorAddress);
+	localArrowCandidates.erase(std::remove_if(localArrowCandidates.begin(), localArrowCandidates.end(),
+		[actorAddress](const LocalArrowCandidate& candidate) { return candidate.address == actorAddress; }), localArrowCandidates.end());
+	localArrowCandidates.push_back({name, actorAddress, type, GetTickCount()});
 }
 
 void ObserveArrowErase(const std::string& name, uint32_t actorAddress)
@@ -451,6 +469,11 @@ void ObserveArrowErase(const std::string& name, uint32_t actorAddress)
 	byte type = 0;
 	if (!TryGetArrowType(name, type))
 		return;
+	{
+		std::lock_guard<std::mutex> lock(local_arrow_candidate_mutex);
+		localArrowCandidates.erase(std::remove_if(localArrowCandidates.begin(), localArrowCandidates.end(),
+			[actorAddress](const LocalArrowCandidate& candidate) { return candidate.address == actorAddress; }), localArrowCandidates.end());
+	}
 	Game::GameInstance->Arrow->EndLocal(actorAddress);
 	for (const auto& player : Instances::PlayerList)
 		player.second->Arrow->EndRemote(actorAddress);
@@ -1431,6 +1454,12 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 		return;
 
 	std::string name = Memory::read_string(Main::baseAddr + hCPU->gpr[3] + 0x10, 100, __FUNCTION__);
+	if (TestTelemetry::enabled() && name.find("Arrow") != std::string::npos)
+	{
+		Logging::LoggerService::LogInformation("Arrow actor callback: " + name +
+			", guest=" + std::to_string(hCPU->gpr[3]) +
+			", local equipment mode=" + std::to_string(Game::GameInstance->CurrentEquipmentMode.load()) + ".", __FUNCTION__);
+	}
 	LogEquipmentChildCreation(name, hCPU->gpr[3]);
 	ObserveArrowCreation(name, hCPU->gpr[3]);
 	if (name.rfind("Weapon_", 0) == 0)

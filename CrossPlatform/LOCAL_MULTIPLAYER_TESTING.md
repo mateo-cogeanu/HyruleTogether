@@ -52,8 +52,8 @@ python3 scripts/test-local-gameplay.py
 
 The runner starts the server and both clients, supplies one loopback DSU virtual
 gamepad per client, navigates Continue, loads the copied saves, waits for live
-player data and remote actors, and exercises movement, jumping, weapon draw,
-bow firing, and client disconnection. It restores controller profiles and stops
+player data, remote actors, and continuously unpaused gameplay, then exercises
+movement, jumping, weapon draw, bow firing, and client disconnection. It restores controller profiles and stops
 its processes on success, failure, timeout, or interruption. No physical input
 or window focus is required. Avoid opening game dialogs during a run.
 
@@ -61,25 +61,35 @@ Each run restores its private saves from `test-baseline/a` and `test-baseline/b`
 The baseline is captured from the test profiles on the first run. The original
 launcher saves are never reset or modified. Use a safe outdoor save with a bow,
 arrows, and a melee weapon; missing prerequisites produce a failed check rather
-than an assumed pass. The current fixture is the existing Great Plateau save.
+than an assumed pass. The current fixture is the existing Great Plateau save. The movement script walks
+backward for two seconds to avoid its nearby cliff; bow aiming turns away from
+overlapping players. Each direction makes up to four draw/fire attempts and
+requires two distinct airborne arrow generations. `--bow-hold 12` extends the
+trigger hold for visual diagnosis (valid range: 1–30 seconds).
 
 Artifacts are stored under `Build/local-multiplayer/runs/<timestamp>/`:
 
 - `report.json`: overall verdict, per-check measurements, input timeline, revision,
   and native-client binary hash. The command exits nonzero on any failed check.
 - `a.jsonl` / `b.jsonl`: opt-in native telemetry sampled at up to 10 Hz per stream.
-- Client launcher, Cemu, native-client, and dedicated-server logs.
+- Client launcher, Cemu, native-client, and dedicated-server logs; input actions are
+  also printed as they execute.
 
 Movement checks require real horizontal displacement and at least 90% of local
 samples matched at the peer within two seconds: one world unit for received
 positions and two for positions written by the remote-actor update path. Missing,
 stationary, non-finite, or excessively late data cannot pass. Animation, equipment,
-and arrow checks compare observed local events with received data. A missing local
-shot is reported separately from a missing remote shot. Disconnect testing checks
+and arrow checks compare observed local events with received data. Arrow checks
+require two IDs observed more than three units from Link, with valid world
+coordinates, and matching received ID/type pairs. Separate assertions require
+those IDs to reach live replica position writes. Missing local flight is reported
+separately from missing receipt or replica updates. Disconnect testing checks
 that remote updates cease while the remaining client stays alive.
 
 `HYRULE_TEST_TELEMETRY` enables these diagnostics only when explicitly set by the
-test runner. The `applied` stream records the current remote actor and the position
+test runner. `readiness` records the game pause state, and `projectile_applied`
+records live replica IDs/types and position readback immediately after a write.
+This readback does not prove the pose persists through a physics tick. The `applied` stream records the current remote actor and the position
 cached by its write path; it does **not** prove the rendered mesh, equipment,
 animation appearance, collision, or arrow physics are correct. Those require
 additional visual or game-state assertions. These are bounded smoke/regression
@@ -93,33 +103,39 @@ python3 -m unittest discover -s CrossPlatform/testing -p 'test_*.py' -v
 
 These tests exercise DSU packet CRC/layout, real UDP subscription, controller
 isolation and button release, and rejection of false passes from stationary,
-vertical-only, missing, invalid, or delayed movement data.
+vertical-only, missing, invalid, or delayed movement data. They also reject stale,
+paused, interrupted readiness data, and arrow passes based only on a nocked arrow,
+one generation, missing peer receipt, an incorrect type, or invalid coordinates.
 
 ## Current evidence — 2026-09-30
 
-- Rebuilt the macOS universal client; the three harness tests pass, including real
+- Rebuilt the macOS universal client; all five harness tests pass, including real
   UDP controller isolation. The earlier five server tests also passed.
-- Two unattended runs loaded the private EU BOTW v208 / DLC 3.0 saves, connected
-  both clients, activated remote actors, exercised all scenarios, and cleaned up.
-- The latest run (`runs/20260930-162501/report.json`) passed 11 of 13 checks:
-  movement, received jump-animation hashes, and received weapon equipment matched
-  in both directions; remote updates stopped after client B exited.
-- Both arrow checks failed: no active local arrow ID was observed. Bow mode did
-  change, but this does not establish that a shot was fired or captured. Inventory,
-  input timing, and local projectile capture still need investigation.
-- The previous run (`runs/20260930-161616/report.json`) additionally failed the
-  B-to-A received-position threshold (74% matched versus the required 90%). Its
-  applied-position comparison passed. Sampling/timing and synchronization behavior
-  need investigation; the threshold has not been relaxed to hide the failure.
-- A preceding startup run crashed while writing an animation control during actor
-  refresh. Resolution, address checks, writes, and readback now share the existing
-  animation-control lock with invalidation. Neither subsequent run reproduced the
-  crash; this is limited repeat-run evidence, not proof of sustained stability.
+- Two consecutive runs (`runs/20260930-172300/report.json` and
+  `runs/20260930-172556/report.json`) pass all 16 current checks. Both directions
+  show movement, jump-animation packets, weapon-data packets, and two airborne
+  bomb-arrow generations received and applied to live replicas. Client loss stops
+  remote updates while the surviving client and server stay alive.
+- Earlier arrow failures exposed an incorrect transform resolver: the character
+  controller is null for arrows, and the bomb resource-handle path is unsuitable.
+  The arrow resolver now follows the live rigid-body sets to the Havok body, with
+  checked pointer reads and verified Wii U v208 position/rotation offsets. Local
+  candidates wait for initialized positions before passing the ownership-radius
+  check; erased/reused actors and invalid positions stop streaming.
+- Inputs previously started during a loading fade, and forward movement could
+  take Link over a cliff. The runner now waits for fresh unpaused samples spanning
+  at least 2.5 seconds, changes the movement path, and makes bounded bow attempts
+  until two airborne generations are observed.
+- Visual observation exposed extra remote Link actors, including a T-pose actor.
+  This remains unresolved and is **not detected by the current passing checks**.
+- A prior startup animation-address crash did not reproduce in subsequent completed
+  runs after the animation-control locking fix. One diagnostic run failed to reach
+  healthy gameplay in client A; its failed report is retained.
 
-The overall gameplay verdict remains **failed** until arrow checks pass. Rendered
-models, animation appearance, equipment appearance, projectile physics, enemy/quest
-sync, reconnect cleanup, and sustained performance remain outside these telemetry
-assertions. No Linux or Android gameplay result is claimed.
+This is a passing telemetry regression run, not a complete multiplayer verdict.
+Duplicate actors, rendered animation/equipment correctness, projectile collisions
+and damage, other arrow types, enemy/quest sync, reconnect cleanup, and sustained
+performance still need testing. No Linux or Android gameplay result is claimed.
 
 ## Gameplay pass
 

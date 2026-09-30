@@ -43,8 +43,8 @@ inline std::mutex sinkMutex;
 inline std::ofstream sinkFile;
 inline std::map<std::string, long long> lastSample;
 
-template<class Writer> void position(Writer& json, DataTypes::Vec3f p) {
-    json.Key("position"); json.StartArray();
+template<class Writer> void position(Writer& json, DataTypes::Vec3f p, const char* key = "position") {
+    json.Key(key); json.StartArray();
     for (int i = 0; i < 3; ++i) {
         if (std::isfinite(p[i])) json.Double(p[i]); else json.Null();
     }
@@ -62,6 +62,8 @@ template<class Character> void character(const char* kind, int slot, const Chara
         json.EndArray();
         json.Key("arrow_id"); json.Int(data.Arrow.Id);
         json.Key("arrow_active"); json.Bool(data.Arrow.Active);
+        json.Key("arrow_type"); json.Int(data.Arrow.Type);
+        position(json, data.Arrow.Position, "arrow_position");
         json.Key("map"); json.String(data.Location.Map.c_str());
     });
 }

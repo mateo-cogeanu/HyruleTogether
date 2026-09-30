@@ -56,6 +56,28 @@ class AutomationTests(unittest.TestCase):
             a.close();b.close()
             for client in sockets:client.close()
 
+    def test_arrows_require_two_distinct_airborne_generations_and_peer_receipt(self):
+        def shot(identifier, position):
+            return dict(arrow_id=identifier, arrow_type=0, arrow_active=True, arrow_position=position, position=[0.,0.,0.])
+        nocked = [shot(1,[0.,1.,0.]),shot(2,[0.,1.,0.])]
+        self.assertFalse(gameplay.arrow_result(nocked,nocked)['passed'])
+        flying = [shot(1,[10.,1.,0.]),shot(2,[10.,1.,0.])]
+        self.assertTrue(gameplay.arrow_result(flying,flying)['passed'])
+        self.assertFalse(gameplay.arrow_result(flying[:1],flying)['passed'])
+        self.assertFalse(gameplay.arrow_result(flying,flying[:1])['passed'])
+        self.assertFalse(gameplay.arrow_result(flying,[dict(r,arrow_type=4) for r in flying])['passed'])
+        self.assertFalse(gameplay.arrow_result([shot(1,[0.,0.,0.]),flying[1]],flying)['passed'])
+        self.assertFalse(gameplay.arrow_result([shot(1,[None,1.,0.]),flying[1]],flying)['passed'])
+
+    def test_readiness_requires_fresh_continuous_unpaused_samples(self):
+        rows = [dict(time_ms=i*100, paused=False) for i in range(31)]
+        self.assertTrue(gameplay.readiness_result(rows, 3000))
+        self.assertFalse(gameplay.readiness_result([], 3000))
+        self.assertFalse(gameplay.readiness_result(rows[-10:], 3000))
+        self.assertFalse(gameplay.readiness_result(rows, 6000))
+        self.assertFalse(gameplay.readiness_result([dict(r, paused=r['time_ms']==1500) for r in rows], 3000))
+        self.assertFalse(gameplay.readiness_result(rows[:10]+rows[20:], 3000))
+
     def test_checker_rejects_no_movement_missing_application_and_delayed_packets(self):
         rows=[dict(time_ms=i*100,position=[i*.2,20.,30.]) for i in range(30)]
         self.assertTrue(gameplay.movement_result(rows,rows,rows,0,2900)['passed'])

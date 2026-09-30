@@ -46,6 +46,14 @@ def live(path):
                 10 < distance(samples[-1]['position'], [0, 0, 0]) < 1e6)
 
 
+def readiness_result(rows, now):
+    rows = [row for row in rows if now - 3000 <= row['time_ms'] <= now]
+    return (len(rows) >= 20 and rows[-1]['time_ms'] >= now - 500
+            and rows[-1]['time_ms'] - rows[0]['time_ms'] >= 2500
+            and all(not row['paused'] for row in rows)
+            and all(b['time_ms'] - a['time_ms'] <= 300 for a, b in zip(rows, rows[1:])))
+
+
 def wait_until(test, seconds, description, alive):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -74,12 +82,28 @@ def movement_result(local, remote, applied, start, end):
                 applied_match_ratio=applied_ratio, sample_count=len(sent))
 
 
+def arrow_result(local, remote):
+    fired = {r['arrow_id'] for r in local if r['arrow_active'] and r['arrow_id'] > 0
+             and 10 < distance(r['arrow_position'], [0.,0.,0.]) < 1e6
+             and 3 < distance(r['arrow_position'], r['position']) < 10000}
+    local_types = {(r['arrow_id'], r['arrow_type']) for r in local if r['arrow_id'] in fired and r['arrow_active']}
+    remote_types = {(r['arrow_id'], r['arrow_type']) for r in remote if r['arrow_active']}
+    received = {identifier for identifier, _ in remote_types}
+    return dict(passed=len(fired) >= 2 and local_types.issubset(remote_types),
+                local_arrow_ids=sorted(fired), received_arrow_ids=sorted(received),
+                reason='Fewer than two airborne arrows observed' if len(fired) < 2 else
+                       ('Remote arrow ID/type was not observed' if not local_types.issubset(remote_types) else 'Matched'))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, default=ROOT / 'Build/local-multiplayer')
     parser.add_argument('--server', type=Path, default=ROOT / 'Build/server' / (('osx' if sys.platform == 'darwin' else 'linux') + ('-arm64' if platform.machine().lower() in ('arm64','aarch64') else '-x64')) / 'MBL.DedicatedServer')
     parser.add_argument('--boot-timeout', type=float, default=240)
+    parser.add_argument('--bow-hold', type=float, default=2, help='Seconds to hold a drawn bow before release (increase for visual diagnosis).')
     args = parser.parse_args()
+    if not math.isfinite(args.bow_hold) or not 1 <= args.bow_hold <= 30:
+        parser.error('--bow-hold must be between 1 and 30 seconds')
     root = args.directory.resolve()
     for label in ('a', 'b'):
         config = json.loads((root / label / 'config.json').read_text())
@@ -132,6 +156,7 @@ def main():
         return process
     def action(label, duration, **state):
         result['actions'].append(dict(client=label, time_ms=time.time()*1000, duration=duration, state=state))
+        print(json.dumps(dict(action=result['actions'][-1])), flush=True)
         pads[label].hold(duration, **state)
         time.sleep(.3)
     def stop_requested(*_):
@@ -182,9 +207,16 @@ def main():
         for label in ('a', 'b'):
             wait_until(lambda: records(run / f'{label}.jsonl', 'applied', time.time()*1000 - 2000), 60, f'{label} remote actor active', alive)
         check('remote_actors_active', passed=True)
+        # Actor creation and cached coordinates can precede the loading fade.
+        for label in ('a', 'b'):
+            def playable():
+                rows = records(run / f'{label}.jsonl', 'readiness', time.time()*1000 - 3000)
+                return readiness_result(rows, time.time()*1000) and live(run / f'{label}.jsonl')
+            wait_until(playable, 60, f'{label} continuously unpaused gameplay', alive)
+        check('both_games_playable', passed=True)
         for label, other in (('a', 'b'), ('b', 'a')):
             start = time.time() * 1000
-            action(label,3,ly=1)
+            action(label,2,ly=-1)
             end = time.time() * 1000
             time.sleep(3); alive()
             check(f'{label}_to_{other}_movement', **movement_result(records(run/f'{label}.jsonl','local'),
@@ -206,16 +238,21 @@ def main():
             check(f'{label}_to_{other}_draw_weapon', passed=bool(held) and held.issubset(matched),
                   local_equipment=sorted(held), received_equipment=sorted(matched))
             action(label,.3,buttons=['b']); time.sleep(2)
+            action(label,.6,rx=1,ry=.35)
             start = time.time()*1000
             action(label,.3,buttons=['zr']); time.sleep(.5)
-            action(label,2,buttons=['zr']); time.sleep(4)
+            for attempt in range(4):
+                action(label,args.bow_hold,buttons=['zr']); time.sleep(4); alive()
+                observed = records(run/f'{label}.jsonl','local',start)
+                if len(arrow_result(observed, observed)['local_arrow_ids']) >= 2:
+                    break
             local = records(run/f'{label}.jsonl','local',start)
             remote = records(run/f'{other}.jsonl','received',start)
-            fired = {r['arrow_id'] for r in local if r['arrow_active']}
-            received = {r['arrow_id'] for r in remote if r['arrow_active']}
-            check(f'{label}_to_{other}_arrow_packets', passed=bool(fired) and fired.issubset(received),
-                  local_arrow_ids=sorted(fired), received_arrow_ids=sorted(received),
-                  reason='Local shot was not observed' if not fired else ('Remote shot was not observed' if not fired.issubset(received) else 'Matched'))
+            check(f'{label}_to_{other}_arrow_packets', **arrow_result(local, remote))
+            observed = arrow_result(local, remote)['local_arrow_ids']
+            bound = {r['arrow_id'] for r in records(run/f'{other}.jsonl', 'projectile_applied', start)}
+            check(f'{label}_to_{other}_arrow_actor_updates', passed=len(observed)>=2 and set(observed).issubset(bound),
+                  local_arrow_ids=observed, applied_arrow_ids=sorted(bound))
             action(label,.3,buttons=['b']); time.sleep(1)
         # Intentional client loss must stop its updates without taking down A or the server.
         victim = next(p for name,p in processes if name == 'b')
