@@ -6,6 +6,20 @@ namespace BOTWM.Tests;
 public class SharedWorldShould
 {
     [Fact]
+    public async Task CombineIndependentHitsAgainstTheSameBaseline()
+    {
+        var enemies = new Enemy(2, true);
+        void Report(int health) => enemies.Update(new EnemyDTO { Health = new() { new EnemyData(42, health) } });
+        Report(100);
+        await Task.WhenAll(Task.Run(() => Report(int.MinValue + 10)), Task.Run(() => Report(int.MinValue + 20)));
+        Report(100); // Delayed baseline cannot heal combined damage.
+        Report(int.MinValue); // Zero/invalid deltas are ignored.
+        Report(int.MinValue + 1000001);
+        foreach (var player in new[] { 0, 1 }) Assert.Equal(70, Assert.Single(enemies.GetQueue(player)).Health);
+        Report(int.MinValue + 80);
+        Assert.Equal(0, Assert.Single(enemies.GetQueue(0)).Health);
+    }
+    [Fact]
     public void KeepLowestReportedHealthAndIgnoreInvalidHealth()
     {
         var enemies = new Enemy(2, true);

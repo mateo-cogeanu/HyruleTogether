@@ -69,6 +69,22 @@ def fixture_readback(source, peer, kind):
     return None
 
 
+def combined_damage_readback(sources, clients, now):
+    """Both independent hits must leave fresh, stable health on the same enemy."""
+    if len(sources) != 2 or len(clients) != 2 or not all(sources): return False
+    changes = [rows[-1] for rows in sources]
+    if any(row['slot'] != -988114952 or row['before'] - row['after'] != damage
+           for row, damage in zip(changes, (6, 3))): return False
+    after = max(row['time_ms'] for row in changes)
+    for rows in clients:
+        recent = [row for row in rows if row['slot'] == -988114952
+                  and max(after, now - 2000) <= row['time_ms'] <= now]
+        if (len(recent) < 3 or recent[-1]['time_ms'] < now - 500
+                or recent[-1]['time_ms'] - recent[0]['time_ms'] < 1000
+                or any(row['health'] != 4 for row in recent)): return False
+    return True
+
+
 def replicated_drop_names(source, peer, live=False):
     """Match stable identities, and for live samples require nearby actor poses."""
     return {row['name'] for row in source if any(
@@ -189,6 +205,8 @@ def main():
     parser.add_argument('--inspection-hold', type=float, default=0, help='Optional pause after movement for visual inspection, in seconds (0 to 60).')
     parser.add_argument('--scenario-window', type=float, default=0, help='Seconds to accept bounded DSU commands from the run input.jsonl file.')
     parser.add_argument('--enemy-fixture', action='store_true', help='Synthetic enemy damage replication in isolated saves.')
+    parser.add_argument('--one-handed-fixture', action='store_true', help='Equip the baseline one-handed club and shield in both clients before testing.')
+    parser.add_argument('--enemy-concurrent-fixture', action='store_true', help='Apply independent synthetic damage from both clients; requires --enemy-fixture.')
     parser.add_argument('--inventory-pickup-client', choices=['a', 'b'], default='a', help='Client that picks up the owner A drop.')
     parser.add_argument('--inventory-pickups', action='store_true', help='Probe pickup of the scripted drops; requires --inventory-drops.')
     parser.add_argument('--inventory-drops', action='store_true', help='Script spear/wood drops and verify peer creation, spawn metadata, and persistent matching positions.')
@@ -196,6 +214,8 @@ def main():
     parser.add_argument('--quest-fixture', action='store_true', help='Opt-in synthetic quest flag replication check in isolated saves.')
     parser.add_argument('--spawn-delay-ms', type=int, default=0, help='Delay the first remote-player spawn for the timeout regression fixture (0 to 30000).')
     args = parser.parse_args()
+    if args.enemy_concurrent_fixture and not args.enemy_fixture:
+        parser.error('--enemy-concurrent-fixture requires --enemy-fixture')
     if not math.isfinite(args.inventory_step_hold) or not 0 <= args.inventory_step_hold <= 15:
         parser.error('--inventory-step-hold must be between 0 and 15 seconds')
     if args.inventory_pickups and not args.inventory_drops:
@@ -238,7 +258,8 @@ def main():
     run = root / 'runs' / time.strftime('%Y%m%d-%H%M%S')
     run.mkdir(parents=True)
     result = dict(passed=False, checks=[], controller_type='Wii U GamePad', spawn_delay_ms=args.spawn_delay_ms,
-                  quest_fixture=args.quest_fixture, enemy_fixture=args.enemy_fixture, scenario_window=args.scenario_window,
+                  quest_fixture=args.quest_fixture, enemy_fixture=args.enemy_fixture,
+                  enemy_concurrent_fixture=args.enemy_concurrent_fixture, scenario_window=args.scenario_window,
                   inventory_drops=args.inventory_drops,
                   scope='Controller-driven game and native synchronization telemetry; synthetic fixtures test transport/application. Visual appearance, dialogue, rewards, and shared enemy AI require separate review.')
     result['revision'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
@@ -296,7 +317,9 @@ def main():
             shutil.copy2(profile, run/f'{label}-controller.xml')
             fixture_env = {}
             if args.inventory_drops: fixture_env['HYRULE_TEST_ITEM_PROBE'] = '1'
-            if args.enemy_fixture and label == 'a': fixture_env['HYRULE_TEST_ENEMY_SOURCE'] = '1'
+            if args.enemy_fixture and (label == 'a' or args.enemy_concurrent_fixture):
+                fixture_env['HYRULE_TEST_ENEMY_SOURCE'] = '1'
+                if label == 'b': fixture_env['HYRULE_TEST_ENEMY_DAMAGE'] = '3'
             if args.quest_fixture:
                 fixture_env['HYRULE_TEST_QUEST_NAME'] = 'HatenoMini_CameraBoy_Activated'
                 if label == 'a': fixture_env['HYRULE_TEST_QUEST_SOURCE'] = '1'
@@ -342,6 +365,29 @@ def main():
         # Checking A then waiting for B can leave A's earlier readiness stale.
         wait_until(playable, 60, 'both clients simultaneously ready', alive)
         check('both_games_playable', passed=True)
+        if args.one_handed_fixture:
+            for label in ('a', 'b'):
+                def fixture_key(button):
+                    action(label, .2, buttons=[button]); action(label, .8)
+                for button in ('plus', 'l', 'l', 'r'): fixture_key(button)
+                for _ in range(7):
+                    action(label, .18, rx=-1); action(label, .4)
+                for button in ('up', 'left'):
+                    for _ in range(5): fixture_key(button)
+                for _ in range(4): fixture_key('right')
+                fixture_key('a')
+                # Item context menus can remember Drop from an earlier action.
+                # Clamp to their first entry (Equip) before confirming.
+                for _ in range(3): fixture_key('up')
+                for button in ('a', 'plus', 'b'): fixture_key(button)
+                def one_handed():
+                    rows = records(run/f'{label}.jsonl', 'local', time.time()*1000 - 2000)
+                    return any(row['equipment'][0] == 1 and row['equipment'][2] != 0
+                               and row['equipment_state'] == 0 for row in rows)
+                wait_until(one_handed, 15, f'{label} one-handed weapon and shield equipped', alive)
+            wait_until(playable, 60, 'both clients ready after equipment fixture', alive)
+            check('one_handed_weapon_and_shield_fixture', passed=True,
+                  scope='One-handed equipment prerequisites; visual attachment timing is a separate check.')
         if args.inventory_drops:
             start = time.time()*1000
             def inventory_button(button, settle=1.2):
@@ -413,6 +459,11 @@ def main():
             check('peer_inventory_drop_persistence', passed={
                 'Weapon_Spear_030', 'Obj_FireWoodBundle'}.issubset(nearby), names=sorted(nearby),
                 scope='Both live actors persist with matching positions, five seconds after spawning.')
+            if args.one_handed_fixture:
+                published = [row for label in ('a', 'b') for row in records(run/f'{label}.jsonl', 'item_published')
+                             if row['name'] == 'Weapon_Sword_004']
+                check('equipped_weapon_excluded_from_shared_drops', passed=not published,
+                      unexpected_publications=published)
             if args.inventory_pickups:
                 pickup_start = time.time()*1000
                 if args.inventory_pickup_client == 'b':
@@ -461,11 +512,16 @@ def main():
                   peer=quest_replicated())
         if args.enemy_fixture:
             def enemy_replicated():
+                if args.enemy_concurrent_fixture:
+                    sources = [records(run/f'{label}.jsonl', 'enemy_fixture_source') for label in ('a', 'b')]
+                    clients = [records(run/f'{label}.jsonl', 'enemy_live') for label in ('a', 'b')]
+                    return combined_damage_readback(sources, clients, time.time()*1000)
                 return fixture_readback(records(run/'a.jsonl', 'enemy_fixture_source'),
                                         records(run/'b.jsonl', 'enemy_live'), 'enemy')
             wait_until(enemy_replicated, 45, 'synthetic enemy damage readback on peer', alive)
             check('synthetic_enemy_damage_replication', passed=True,
-                  source=records(run/'a.jsonl', 'enemy_fixture_source')[-1], peer=enemy_replicated())
+                  source=records(run/'a.jsonl', 'enemy_fixture_source')[-1], peer=enemy_replicated(),
+                  other_source=records(run/'b.jsonl', 'enemy_fixture_source')[-1] if args.enemy_concurrent_fixture else None)
         actor_check_start = time.time()*1000
         for label, other in (('a', 'b'), ('b', 'a')):
             wait_until(playable, 60, f'both clients ready before {label} movement', alive)

@@ -4,11 +4,8 @@ namespace BOTWM.Server.ServerClasses
 {
     public class Enemy
     {
-        const int CLEARMINUTES = 60;
-
         private readonly object EMutex = new();
         public bool isEnemySync;
-        private DateTime LastClear;
 
         public Dictionary<int, int> EnemyList;
         public List<Dictionary<int, int>> Queue;
@@ -20,7 +17,6 @@ namespace BOTWM.Server.ServerClasses
             for (int i = 0; i < playerLimit; i++)
                 Queue.Add(new Dictionary<int, int>());
             UpdateServiceStatus(enemySync);
-            LastClear = DateTime.Now;
         }
 
         public void UpdateServiceStatus(bool newStatus)
@@ -32,8 +28,9 @@ namespace BOTWM.Server.ServerClasses
         {
             lock (EMutex)
             {
-                double TimeSinceLastClear = DateTime.Now.Subtract(LastClear).TotalMinutes;
-                if (!isEnemySync || TimeSinceLastClear > CLEARMINUTES)
+                // A timer must not discard baselines in an active combat session:
+                // subsequent delta packets require the retained health state.
+                if (!isEnemySync)
                     ClearEnemyData();
                 if (!isEnemySync) return;
 
@@ -52,7 +49,6 @@ namespace BOTWM.Server.ServerClasses
                 for (int i = 0; i < Queue.Count; i++)
                     Queue[i].Clear();
 
-                LastClear = DateTime.Now;
 
             }
 
@@ -92,6 +88,13 @@ namespace BOTWM.Server.ServerClasses
 
         private void UpdateEnemyHealth(int hash, int health)
         {
+            // Negotiated clients encode local damage in a reserved negative
+            // range. Server replies always contain ordinary absolute health.
+            // This preserves both hits when peers damage the same baseline.
+            long damage = (long)health - int.MinValue;
+            if (hash != 0 && damage > 0 && damage <= 1000000 && EnemyList.TryGetValue(hash, out var current)) {
+                health = Math.Max(0, current - (int)damage);
+            }
             if (hash == 0 || health < 0) return;
 
             if (!EnemyList.ContainsKey(hash) || (EnemyList.ContainsKey(hash) && EnemyList[hash] > health))

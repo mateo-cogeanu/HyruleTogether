@@ -171,6 +171,8 @@ bool Main::connectToServer(std::string serverMessage)
 
     if (serverDoc["Response"].GetInt() == 1)
     {
+        DataTypes::EnemyDamageDeltas = serverDoc.HasMember("EnemyDamageDeltas") &&
+            serverDoc["EnemyDamageDeltas"].IsBool() && serverDoc["EnemyDamageDeltas"].GetBool();
         //int pN = serverData[2] - '0';
         int pN = serverDoc["PlayerNumber"].GetInt();
 

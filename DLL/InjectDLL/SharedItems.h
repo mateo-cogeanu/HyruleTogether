@@ -1,5 +1,6 @@
 #pragma once
 #include "ActorSpawnParams.h"
+#include "CharacterEquipment.h"
 #include "Memory.h"
 #include "TestTelemetry.h"
 #include <cctype>
@@ -20,12 +21,14 @@ struct Item {
     bool sent = false, remote = false, deleting = false;
     unsigned attempts = 0;
     bool live = false;
+    bool equipmentCandidate = false;
     int deleteReason = -1;
     DataTypes::Vec3f position;
 };
 inline std::mutex mutex;
 inline std::map<std::string, Item> items;
 inline std::deque<Item> captures;
+inline std::map<std::string, DWORD> equipmentRequests;
 inline std::deque<std::string> spawnQueue, deleteQueue;
 inline std::string expecting, localMap, localSection;
 inline DWORD expectedSince = 0, lastPaused = 0;
@@ -36,6 +39,7 @@ inline void reset() {
     std::lock_guard<std::mutex> lock(mutex);
     items.clear();
     captures.clear();
+    equipmentRequests.clear();
     spawnQueue.clear();
     deleteQueue.clear();
     expecting.clear();
@@ -47,6 +51,15 @@ inline void reset() {
 inline const std::map<std::string, uint8_t> allowed = {
     {"IsPlayerPut", 3}, {"AddParam", 0}, {"AddSpecialFlag", 0}, {"IsWeaponCreateByRawLife", 3},
     {"@RL", 0},         {"@S", 4},       {"Life", 0},           {"@M", 7}};
+inline bool equippedResourceMatches(const std::string& name, const DataTypes::CharacterEquipment& equipment) {
+    auto matches = [&](const std::string& prefix, unsigned id) {
+        return id > 0 && id <= 999 && name == prefix + std::to_string(1000 + id).substr(1);
+    };
+    const std::string melee = equipment.WType == 1 ? "Weapon_Sword_" :
+        equipment.WType == 2 ? "Weapon_Lsword_" : equipment.WType == 3 ? "Weapon_Spear_" : "";
+    return (!melee.empty() && matches(melee, equipment.Sword)) ||
+        matches("Weapon_Shield_", equipment.Shield) || matches("Weapon_Bow_", equipment.Bow);
+}
 inline std::string hex(const std::vector<uint8_t> &value) {
     const char *digits = "0123456789abcdef";
     std::string out;

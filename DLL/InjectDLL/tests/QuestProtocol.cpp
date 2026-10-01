@@ -3,12 +3,37 @@
 #include "LoggerService.h"
 #include "ActorSpawnParams.h"
 #include "SharedItems.h"
+#include "EnemyCombat.h"
 #include <cassert>
 #include <iostream>
 namespace Logging {
 void LoggerService::LogInformation(std::string, const char*) {}
 }
 int main() {
+    DataTypes::EnemyCombat combat;
+    assert(combat.observe(100) == 100 && combat.takeUpdate() == 100);
+    combat.receive(80);
+    assert(combat.observe(100) == 80 && !combat.pending()); // Remote hit does not echo.
+    assert(combat.observe(70) == 70 && combat.pending());
+    assert(combat.takeUpdate() == std::numeric_limits<int>::min() + 10);
+    combat.receive(60);
+    assert(combat.observe(65) == 60); // Local 5 damage arrives beside a remote hit.
+    assert(combat.takeUpdate() == std::numeric_limits<int>::min() + 5);
+    assert(combat.observe(60) == 60 && !combat.pending());
+    combat.receive(90); // Stale reply cannot heal.
+    assert(combat.observe(60) == 60);
+    assert(combat.observe(-1) == -1 && !combat.pending());
+    DataTypes::EnemyCombat interrupted;
+    interrupted.observe(100); interrupted.takeUpdate(); interrupted.receive(80);
+    int memoryHealth = 90, attempts = 0;
+    assert(interrupted.synchronize(memoryHealth, [&](int& expected, int desired) {
+        if (++attempts == 1) memoryHealth = 85; // Another local hit wins the first write race.
+        if (expected != memoryHealth) { expected = memoryHealth; return false; }
+        memoryHealth = desired; return true;
+    }) == 80);
+    assert(attempts == 2 && memoryHealth == 80);
+    assert(interrupted.takeUpdate() == std::numeric_limits<int>::min() + 15);
+    assert(interrupted.observe(80) == 80 && !interrupted.pending());
     std::vector<uint8_t> params = {0, 0, 0, 1, 0, 0, 0, 7, 0xd0,
                                   0, 0, 0, 2, 3, 0};
     const auto keys = [](uint32_t p) { return p == 1 ? "Life" : p == 2 ? "IsPlayerPut" : ""; };
@@ -36,6 +61,14 @@ int main() {
     matrix[12] = 0x44; matrix[13] = 0x7a; // World X = 1000.
     item.params = {{"IsPlayerPut", 3, {0}}, {"Life", 0, {0,0,7,0xd0}}, {"@M", 7, matrix}};
     assert(SharedItems::validate(item));
+    DataTypes::CharacterEquipment equipment{};
+    equipment.WType = 1; equipment.Sword = 4; equipment.Shield = 41;
+    assert(SharedItems::equippedResourceMatches("Weapon_Sword_004", equipment));
+    assert(SharedItems::equippedResourceMatches("Weapon_Shield_041", equipment));
+    assert(!SharedItems::equippedResourceMatches("Weapon_Spear_004", equipment));
+    assert(!SharedItems::equippedResourceMatches("Weapon_Sword_005", equipment));
+    equipment.Sword = 0;
+    assert(!SharedItems::equippedResourceMatches("Weapon_Sword_004", equipment));
     auto unsafe = item; unsafe.params.push_back({"@D", 6, {0,0,0,0}});
     assert(!SharedItems::validate(unsafe));
     unsafe = item; unsafe.params.push_back({"@I", 0, {0,0,0,3}});

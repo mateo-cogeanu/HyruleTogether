@@ -34,6 +34,13 @@ void CaptureSharedItem(const std::string &name, PPCInterpreter_t *hCPU) {
         return;
     bool inventory = false, rawLife = false, hasLife = false, hasMatrix = false;
     for (auto &p : params) {
+        // @PC is the player-equipment creation flag, not a world-drop value.
+        // Its following raw-life create uses the same public factory as drops.
+        if (p.key == "@PC" && p.type == 3 && p.value.size() == 1 && p.value[0] == 1) {
+            std::lock_guard<std::mutex> lock(SharedItems::mutex);
+            SharedItems::equipmentRequests[name] = GetTickCount();
+            return;
+        }
         if (!SharedItems::allowed.count(p.key) &&
             !(p.key == "@I" && p.type == 0 && p.value.size() == 4))
             return;
@@ -65,6 +72,9 @@ void CaptureSharedItem(const std::string &name, PPCInterpreter_t *hCPU) {
     item.name = name;
     item.params = params;
     item.captured = GetTickCount();
+    auto equipmentRequest = SharedItems::equipmentRequests.find(name);
+    item.equipmentCandidate = equipmentRequest != SharedItems::equipmentRequests.end() &&
+        GetTickCount() - equipmentRequest->second < 3000;
     item.owner = Main::playerNumber;
     item.id = std::to_string(GetTickCount()) + "-" + std::to_string(Main::playerNumber) + "-" +
               std::to_string(++SharedItems::sequence);
@@ -156,6 +166,29 @@ void PublishSharedItems(DTO::ClientDTO *data) {
             }
             if (GetTickCount() - it->captured < 1000) {
                 ++it;
+                continue;
+            }
+            // The inventory factory also creates equipped weapon children.
+            // Wii U v208 BaseProc::getConnectedCalcParent (0x0378af6c)
+            // reads +0x68; setConnectedCalcParent queues its new parent at
+            // +0x70. Neither a bound child nor a pending child is a world drop.
+            uint32_t parent = 0, pendingParent = 0;
+            if (!Memory::TryReadBigEndian4BytesOffset(uint64_t(it->actor) + 0x68, parent) ||
+                !Memory::TryReadBigEndian4BytesOffset(uint64_t(it->actor) + 0x70, pendingParent)) {
+                ++it;
+                continue;
+            }
+            const bool equipped = it->equipmentCandidate &&
+                SharedItems::equippedResourceMatches(it->name, data->PlayerData->Equipment);
+            if (parent || pendingParent || equipped) {
+                TestTelemetry::emit("item_attached_skipped", -1, [&](auto& w) {
+                    w.Key("name"); w.String(it->name.c_str());
+                    w.Key("actor"); w.Uint(it->actor);
+                    w.Key("parent"); w.Uint(parent);
+                    w.Key("pending_parent"); w.Uint(pendingParent);
+                    w.Key("equipped"); w.Bool(equipped);
+                }, true);
+                it = SharedItems::captures.erase(it);
                 continue;
             }
             std::vector<uint8_t> matrix;

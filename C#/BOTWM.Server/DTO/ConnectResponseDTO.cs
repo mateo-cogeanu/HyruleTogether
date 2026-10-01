@@ -8,5 +8,6 @@
         public ServerSettings Settings;
         public bool QuestSync;
         public string EnemySyncList;
+        public bool EnemyDamageDeltas = true;
     }
 }

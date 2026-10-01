@@ -43,6 +43,32 @@ session replaces LatestLog and archives the previous session in that profile.
 
 ## Unattended gameplay regression run
 
+Use `--one-handed-fixture` with the current Great Plateau baseline to equip its
+one-handed club and shield in both clients. The fixture selects Equip explicitly;
+the context menu can remember a prior Drop selection. With `--inventory-drops`,
+an additional assertion rejects equipped clubs in the shared-item stream.
+
+Use `--enemy-fixture --enemy-concurrent-fixture` to apply independent synthetic
+damage from both clients. The baseline Bokoblin has 13 health; the 6 and 3 damage
+must leave stable, fresh 4-health readback on both clients. This verifies shared
+damage accounting and application, not real combat or shared enemy AI. Native
+state tests reject damage echoes; server tests combine simultaneous hits. Updated
+servers advertise the delta capability during connection; older servers use the
+legacy client mode. Active combat baselines are retained for the server session;
+Blood Moon and respawn resets still require explicit generation synchronization.
+
+The combined regression command is:
+
+```sh
+python3 scripts/test-local-gameplay.py --one-handed-fixture --enemy-fixture --enemy-concurrent-fixture --quest-fixture --inventory-drops --inventory-pickups --inventory-pickup-client b
+```
+
+Runs `20261001-202319` and `20261001-203025` pass all 28 checks. The second
+includes conditional atomic health application; its native state test also
+injects a hit between the health read and write. Seventeen server tests and
+thirteen harness tests pass. Shield attachment timing, real quest dialogue and
+rewards, shared enemy AI/attacks, and broader item classification remain unverified.
+
 After preparing the profiles, run:
 
 ```sh

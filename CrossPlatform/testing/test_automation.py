@@ -23,6 +23,17 @@ def request(kind, body=b''):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_combined_damage_requires_two_hits_and_stable_fresh_readback(self):
+        sources = [[dict(slot=-988114952, before=13, after=7, time_ms=100)],
+                   [dict(slot=-988114952, before=13, after=10, time_ms=110)]]
+        rows = [dict(slot=-988114952, health=4, time_ms=t) for t in range(1000, 3001, 100)]
+        self.assertTrue(gameplay.combined_damage_readback(sources, [rows, rows], 3000))
+        self.assertFalse(gameplay.combined_damage_readback([sources[0], []], [rows, rows], 3000))
+        self.assertFalse(gameplay.combined_damage_readback(sources, [rows, rows], 5000))
+        bad = rows[:-1] + [dict(rows[-1], health=0)] # A momentary match followed by an echo fails.
+        self.assertFalse(gameplay.combined_damage_readback(sources, [rows, bad], 3000))
+        self.assertFalse(gameplay.combined_damage_readback(sources, [rows, [dict(r, slot=42) for r in rows]], 3000))
+
     def test_shared_drops_require_matching_identity_and_persistent_live_pose(self):
         source = dict(id='drop-1', name='Obj_FireWoodBundle', time_ms=100, position=[100, 20, 50])
         peer = dict(source, time_ms=110, position=[100.1, 20, 50])

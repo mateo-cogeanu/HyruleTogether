@@ -89,11 +89,16 @@ namespace MemoryAccess
 
 				if (fixture && !paused && !fixtureApplied && fixtureStarted &&
                     GetTickCount() - fixtureStarted >= 10000 && LocalHash == -988114952 &&
-                    LocalEnemy->Health->get(__FUNCTION__) == 13) {
-                    LocalEnemy->Health->set(7, __FUNCTION__);
+                    LocalEnemy->Health->get(__FUNCTION__) > 0) {
+                    const int before = LocalEnemy->Health->get(__FUNCTION__);
+                    const char* configuredDamage = std::getenv("HYRULE_TEST_ENEMY_DAMAGE");
+                    const int damage = configuredDamage && std::string(configuredDamage) == "3" ? 3 : 6;
+                    const int after = std::max(0, before - damage);
+                    LocalEnemy->Health->set(after, __FUNCTION__);
                     fixtureApplied = true;
                     TestTelemetry::emit("enemy_fixture_source", LocalHash, [&](auto& json) {
-                        json.Key("before"); json.Int(13); json.Key("after"); json.Int(7);
+                        json.Key("before"); json.Int(before); json.Key("after"); json.Int(after);
+                        json.Key("damage"); json.Int(damage);
                     }, true);
                 }
                 const int health = LocalEnemy->GetHealth(__FUNCTION__);
@@ -109,7 +114,7 @@ namespace MemoryAccess
 				
 				EnemyData EnemyToAdd;
 				EnemyToAdd.Hash = LocalHash;
-				EnemyToAdd.Health = LocalEnemy->CurrentHealth;
+				EnemyToAdd.Health = EnemyDamageDeltas ? LocalEnemy->Combat.takeUpdate() : LocalEnemy->CurrentHealth;
 				result->Health.push_back(EnemyToAdd);
 				LocalEnemy->IsUpdated = false;
 			}
