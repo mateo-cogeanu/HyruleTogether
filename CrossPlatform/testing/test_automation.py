@@ -23,6 +23,25 @@ def request(kind, body=b''):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_shared_drops_require_matching_identity_and_persistent_live_pose(self):
+        source = dict(id='drop-1', name='Obj_FireWoodBundle', time_ms=100, position=[100, 20, 50])
+        peer = dict(source, time_ms=110, position=[100.1, 20, 50])
+        self.assertEqual(gameplay.replicated_drop_names([source], [peer]), {'Obj_FireWoodBundle'})
+        self.assertEqual(gameplay.replicated_drop_names([source], [peer], live=True), {'Obj_FireWoodBundle'})
+        self.assertFalse(gameplay.replicated_drop_names([source], [dict(peer, id='another')]))
+        self.assertFalse(gameplay.replicated_drop_names([source], [dict(peer, time_ms=90)]))
+        self.assertFalse(gameplay.replicated_drop_names([source], [], live=True))  # An erased actor is absent.
+        self.assertFalse(gameplay.replicated_drop_names([source], [dict(peer, position=[0, 0, 0])], live=True))
+        self.assertFalse(gameplay.replicated_drop_names([source], [dict(peer, position=[float('nan'), 20, 50])], live=True))
+
+    def test_shared_pickup_requires_completed_removal_of_the_same_item_on_the_peer(self):
+        source = dict(id='drop-1', removed=True, time_ms=100)
+        peer = dict(source, time_ms=110)
+        self.assertEqual(gameplay.pickup_cleanup_ids([source], [peer]), {'drop-1'})
+        for invalid in (dict(peer, id='another'), dict(peer, removed=False), dict(peer, time_ms=90)):
+            self.assertFalse(gameplay.pickup_cleanup_ids([source], [invalid]))
+        self.assertFalse(gameplay.pickup_cleanup_ids([dict(source, removed=False)], [peer]))
+
     def test_inventory_capture_rejects_equipment_and_missing_item_metadata(self):
         def row(name, life='000007d0', extra=None, at=100):
             params = [dict(key='IsPlayerPut', type=3, bytes='00' if name.startswith('Weapon_') else '01'),

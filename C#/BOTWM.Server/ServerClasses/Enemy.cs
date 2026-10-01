@@ -72,14 +72,14 @@ namespace BOTWM.Server.ServerClasses
             }
         }
 
-        public List<EnemyData> GetQueue(int playerNumber)
+        public List<EnemyData> GetQueue(int playerNumber, int limit = 200)
         {
             List<EnemyData> Data = new List<EnemyData>();
 
             lock (EMutex)
             {
 
-                foreach (KeyValuePair<int, int> kvp in Queue[playerNumber].Take(200).ToArray())
+                foreach (KeyValuePair<int, int> kvp in Queue[playerNumber].Take(Math.Clamp(limit, 0, 200)).ToArray())
                 {
                     Data.Add(new EnemyData(kvp.Key, kvp.Value));
                     Queue[playerNumber].Remove(kvp.Key);

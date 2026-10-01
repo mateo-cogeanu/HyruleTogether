@@ -1756,6 +1756,7 @@ uint64_t Memory::Bomb::FindPosAddr()
 
 void Main::mainServerLoop()
 {
+    SharedItems::reset();
     Setup();
 
     /* Variable initialization */
@@ -1784,7 +1785,11 @@ void Main::mainServerLoop()
         }
 
         byte serverData[7168];
-        Serialization::Serializer::SerializeClientData(&serverData[0], Game::GameInstance->get(started, QuestSyncReady));
+        auto request = Game::GameInstance->get(started, QuestSyncReady);
+        PublishSharedItems(request);
+        Serialization::Serializer::SerializeClientData(&serverData[0], request);
+        delete request->WorldData; delete request->PlayerData;
+        delete request->EnemyData; delete request->QuestData; delete request;
 
         DWORD pingTimer = GetTickCount();
 
@@ -2022,6 +2027,7 @@ void Main::mainServerLoop()
             if (Instances::PlayerList[i]->connected && std::find(ConnectedPlayers.begin(), ConnectedPlayers.end(), i) == ConnectedPlayers.end())
                 Instances::PlayerList[i]->Disconnect();
 
+        SharedItems::incoming(serverResponse->SharedItems, Main::playerNumber);
         Game::GameInstance->EnemyService->SetServerData(serverResponse->EnemyData);
         Game::GameInstance->QuestService->SetServerData(serverResponse->QuestData->Completed, !Game::GameInstance->WorldReady.load(std::memory_order_acquire) || Game::GameInstance->IsPaused(), QuestSyncReady);
     }

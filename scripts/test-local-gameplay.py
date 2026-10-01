@@ -69,6 +69,20 @@ def fixture_readback(source, peer, kind):
     return None
 
 
+def replicated_drop_names(source, peer, live=False):
+    """Match stable identities, and for live samples require nearby actor poses."""
+    return {row['name'] for row in source if any(
+        other['id'] == row['id'] and other['name'] == row['name'] and
+        (distance(row['position'], other['position']) < 2 if live else
+         other['time_ms'] >= row['time_ms']) for other in peer)}
+
+
+def pickup_cleanup_ids(local_erased, peer_erased):
+    return {row['id'] for row in local_erased if row['removed'] and any(
+        other['id'] == row['id'] and other['removed'] and
+        other['time_ms'] >= row['time_ms'] for other in peer_erased)}
+
+
 def inventory_drop_result(rows, start, end):
     found = {}
     wood_creations = set()
@@ -175,13 +189,17 @@ def main():
     parser.add_argument('--inspection-hold', type=float, default=0, help='Optional pause after movement for visual inspection, in seconds (0 to 60).')
     parser.add_argument('--scenario-window', type=float, default=0, help='Seconds to accept bounded DSU commands from the run input.jsonl file.')
     parser.add_argument('--enemy-fixture', action='store_true', help='Synthetic enemy damage replication in isolated saves.')
-    parser.add_argument('--inventory-drops', action='store_true', help='Script spear/wood drops on the known isolated baseline and verify local factory capture only.')
+    parser.add_argument('--inventory-pickup-client', choices=['a', 'b'], default='a', help='Client that picks up the owner A drop.')
+    parser.add_argument('--inventory-pickups', action='store_true', help='Probe pickup of the scripted drops; requires --inventory-drops.')
+    parser.add_argument('--inventory-drops', action='store_true', help='Script spear/wood drops and verify peer creation, spawn metadata, and persistent matching positions.')
     parser.add_argument('--inventory-step-hold', type=float, default=0, help='Optional 0–15 second inspection pause after each inventory button.')
     parser.add_argument('--quest-fixture', action='store_true', help='Opt-in synthetic quest flag replication check in isolated saves.')
     parser.add_argument('--spawn-delay-ms', type=int, default=0, help='Delay the first remote-player spawn for the timeout regression fixture (0 to 30000).')
     args = parser.parse_args()
     if not math.isfinite(args.inventory_step_hold) or not 0 <= args.inventory_step_hold <= 15:
         parser.error('--inventory-step-hold must be between 0 and 15 seconds')
+    if args.inventory_pickups and not args.inventory_drops:
+        parser.error('--inventory-pickups requires --inventory-drops')
     if not 0 <= args.spawn_delay_ms <= 30000:
         parser.error('--spawn-delay-ms must be between 0 and 30000')
     if not math.isfinite(args.scenario_window) or not 0 <= args.scenario_window <= 180:
@@ -277,7 +295,7 @@ def main():
             write_profile(profile, pads[label].port)
             shutil.copy2(profile, run/f'{label}-controller.xml')
             fixture_env = {}
-            if args.inventory_drops and label == 'a': fixture_env['HYRULE_TEST_ITEM_PROBE'] = '1'
+            if args.inventory_drops: fixture_env['HYRULE_TEST_ITEM_PROBE'] = '1'
             if args.enemy_fixture and label == 'a': fixture_env['HYRULE_TEST_ENEMY_SOURCE'] = '1'
             if args.quest_fixture:
                 fixture_env['HYRULE_TEST_QUEST_NAME'] = 'HatenoMini_CameraBoy_Activated'
@@ -359,6 +377,61 @@ def main():
             time.sleep(2); alive()
             check('local_inventory_drop_capture', **inventory_drop_result(
                 records(run/'a.jsonl', 'item_factory_request'), start, time.time()*1000))
+            def replicated_drops():
+                source = records(run/'a.jsonl', 'item_published', start)
+                peer = records(run/'b.jsonl', 'item_spawned', start)
+                return replicated_drop_names(source, peer)
+            deadline = time.monotonic() + 15
+            while time.monotonic() < deadline and not {
+                'Weapon_Spear_030', 'Obj_FireWoodBundle'}.issubset(replicated_drops()):
+                time.sleep(.5); alive()
+            check('peer_inventory_drop_spawn', passed={
+                'Weapon_Spear_030', 'Obj_FireWoodBundle'}.issubset(replicated_drops()),
+                names=sorted(replicated_drops()), scope='Peer actor creation for the same published item IDs.')
+
+            peer_requests = records(run/'b.jsonl', 'item_factory_request', start)
+            def peer_metadata(name):
+                for row in peer_requests:
+                    if row['name'] != name: continue
+                    for pack in row['packs']:
+                        if pack['register'] == 7:
+                            yield {p['key']: p for p in pack['params']}
+            spear_original = inventory_drop_result(records(run/'a.jsonl', 'item_factory_request'), start, time.time()*1000)['captured'].get('Weapon_Spear_030')
+            source_params = {p['key']: p for p in spear_original['packs'][0]['params']} if spear_original else {}
+            weapon_metadata = bool(source_params) and any(all(params.get(key) == source_params.get(key) for key in (
+                'Life', 'AddParam', 'AddSpecialFlag', 'IsWeaponCreateByRawLife'))
+                for params in peer_metadata('Weapon_Spear_030'))
+            material_metadata = any('@I' not in params and params.get('@M', {}).get('type') == 7
+                for params in peer_metadata('Obj_FireWoodBundle'))
+            check('peer_inventory_drop_metadata', passed=weapon_metadata and material_metadata,
+                  weapon_metadata=weapon_metadata, material_metadata=material_metadata,
+                  scope='Peer game factory receives matching weapon durability/modifiers and a world material transform.')
+            time.sleep(5); alive()
+            source_live = records(run/'a.jsonl', 'item_live', time.time()*1000 - 2000)
+            peer_live = records(run/'b.jsonl', 'item_live', time.time()*1000 - 2000)
+            nearby = replicated_drop_names(source_live, peer_live, live=True)
+            check('peer_inventory_drop_persistence', passed={
+                'Weapon_Spear_030', 'Obj_FireWoodBundle'}.issubset(nearby), names=sorted(nearby),
+                scope='Both live actors persist with matching positions, five seconds after spawning.')
+            if args.inventory_pickups:
+                pickup_start = time.time()*1000
+                if args.inventory_pickup_client == 'b':
+                    action('b', .2, buttons=['b']); action('b', 1)
+                for _ in range(4 if args.inventory_pickup_client == 'b' else 2):
+                    action(args.inventory_pickup_client, .2, buttons=['a']); action(args.inventory_pickup_client, 2)
+                if args.inventory_pickup_client == 'b':
+                    action('b', .2, buttons=['b']); action('b', 1)
+                deadline = time.monotonic() + 8
+                pickup_ids = set()
+                while time.monotonic() < deadline:
+                    local_erased = records(run/f'{args.inventory_pickup_client}.jsonl', 'item_erased', pickup_start)
+                    peer_label = 'b' if args.inventory_pickup_client == 'a' else 'a'
+                    peer_erased = records(run/f'{peer_label}.jsonl', 'item_erased', pickup_start)
+                    pickup_ids = pickup_cleanup_ids(local_erased, peer_erased)
+                    if pickup_ids: break
+                    time.sleep(.5); alive()
+                check('shared_inventory_pickup_cleanup', passed=bool(pickup_ids), ids=sorted(pickup_ids),
+                      scope='Local pickup removes the same item actor on the peer after server confirmation.')
         if args.scenario_window:
             print(f'Scenario input ready: {run / "input.jsonl"}', flush=True)
             deadline = time.monotonic() + args.scenario_window

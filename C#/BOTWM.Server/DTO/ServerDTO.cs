@@ -4,6 +4,7 @@ namespace BOTWM.Server.DTO
 {
     public class ServerDTO
     {
+        public List<SharedItem> SharedItems { get; set; } = new();
         public ServerDTO()
         {
             WorldData = new WorldDTO();

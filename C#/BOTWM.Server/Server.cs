@@ -198,9 +198,12 @@ namespace BOTWM.Server
                         ServerData.UpdatePlayerData(UserInformation.PlayerData, PlayerNumber);
                         ServerData.UpdateEnemyData(UserInformation.EnemyData);
                         ServerData.UpdateQuestData(UserInformation.QuestData);
+                        ServerData.ItemData.Update(PlayerNumber, UserInformation.SharedItems);
 
                         ServerDTO serverDTO = ServerData.GetData(PlayerNumber);
                         serverDTO.NetworkData.Map(this);
+                        int baseSize = new JSONBuilder.JSONBuilder().BuildArrayOfBytes(serverDTO, true).Length;
+                        serverDTO.SharedItems = ServerData.ItemData.GetQueue(PlayerNumber, Math.Max(2, Math.Min(2048, 7168 - baseSize)));
 
                         SendAll(connection, new JSONBuilder.JSONBuilder().BuildArrayOfBytes(serverDTO));
 

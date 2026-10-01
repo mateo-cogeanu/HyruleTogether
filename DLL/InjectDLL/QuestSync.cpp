@@ -482,9 +482,13 @@ void Quests_class::changeFlag()
 		if (resyncParaglider && DungeonClearCounterAddress != 0)
 			if (Memory::read_bigEndian4Bytes(DungeonClearCounterAddress, __FUNCTION__) > 3)
 			{
+				if (std::find(boolsToChange.begin(), boolsToChange.end(), "FindDungeon_Ready") == boolsToChange.end())
 				boolsToChange.push_back("FindDungeon_Ready");
+				if (std::find(boolsToChange.begin(), boolsToChange.end(), "FindDungeon_Activated") == boolsToChange.end())
 				boolsToChange.push_back("FindDungeon_Activated");
+				if (std::find(boolsToChange.begin(), boolsToChange.end(), "FindDungeon_AllClear") == boolsToChange.end())
 				boolsToChange.push_back("FindDungeon_AllClear");
+				if (std::find(boolsToChange.begin(), boolsToChange.end(), "FindDungeon_1stClear") == boolsToChange.end())
 				boolsToChange.push_back("FindDungeon_1stClear");
 				std::cout << "Resynced paraglider" << std::endl;
 			}
@@ -502,16 +506,24 @@ void Quests_class::changeFlag()
             json.Key("item_ready"); json.Uint(Memory::read_bytes(addingItemAddress, 1, __FUNCTION__)[0]);
             json.Key("pending_bools"); json.Uint(boolsToChange.size());
         });
-		if (Memory::read_bytes(addingKorokAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingBoolAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingIntAddress, 1, __FUNCTION__)[0] == 0x00 || Memory::read_bytes(addingItemAddress, 1, __FUNCTION__)[0] == 0x00) {
+        const bool korokReady = Memory::read_bytes(addingKorokAddress, 1, __FUNCTION__)[0] != 0;
+        const bool boolReady = Memory::read_bytes(addingBoolAddress, 1, __FUNCTION__)[0] != 0;
+        const bool intReady = Memory::read_bytes(addingIntAddress, 1, __FUNCTION__)[0] != 0;
+        const bool itemReady = Memory::read_bytes(addingItemAddress, 1, __FUNCTION__)[0] != 0;
+        if (!korokReady && !boolReady && !intReady && !itemReady) {
             guard.unlock(); Sleep(10); continue;
         }
 
-		for (int i = 0; i < ToDeactivate.size(); i++)
-			QuestList[ToDeactivate[i]].beingChanged = false;
+        for (auto it = ToDeactivate.begin(); it != ToDeactivate.end();) {
+            const auto quest = QuestList.find(*it);
+            if (quest == QuestList.end()) { it = ToDeactivate.erase(it); continue; }
+            const bool ready = quest->second.Type == "L" ? intReady : boolReady;
+            if (!ready) { ++it; continue; }
+            quest->second.beingChanged = false;
+            it = ToDeactivate.erase(it);
+        }
 
-		ToDeactivate.clear();
-
-		if (koroksToAdd == 0 && boolsToChange.size() == 0 && intsToChange.size() == 0)
+		if (koroksToAdd == 0 && boolsToChange.empty() && intsToChange.empty() && itemsToAdd.empty())
 		{
 			guard.unlock(); Sleep(50);
 			continue;
@@ -524,25 +536,22 @@ void Quests_class::changeFlag()
 			continue;
 		}
 
-		if (koroksToAdd > 0)
+		if (koroksToAdd > 0 && korokReady)
 		{
 			Logging::LoggerService::LogDebug("Added korok", __FUNCTION__);
 			Memory::write_byte(addingKorokAddress, 0x00, __FUNCTION__);
 			koroksToAdd--;
 		}
 
-		if (boolsToChange.size() > 0)
+		if (!boolsToChange.empty() && boolReady)
 		{
 			std::string ID;
 			Quest quest;
 
 			for (auto const& pair : QuestList)
 			{
-				ID = pair.first;
-				quest = pair.second;
-
-				if (boolsToChange[0] == quest.Name)
-					break;
+                quest = pair.second;
+                if (boolsToChange[0] == quest.Name) { ID = pair.first; break; }
 			}
 
 			if (boolsToChange[0].find("Clear_Dungeon") != std::string::npos)
@@ -573,12 +582,12 @@ void Quests_class::changeFlag()
 
 			//QuestList[ID].beingChanged = false;
 
-			ToDeactivate.push_back(ID);
+			if (!ID.empty()) ToDeactivate.push_back(ID);
 
 			boolsToChange.erase(boolsToChange.begin());
 		}
 
-		if (intsToChange.size() > 0)
+		if (!intsToChange.empty() && intReady)
 		{
 			Memory::write_string(intFlagAddress, intsToChange[0], 0x47, __FUNCTION__);
 			Memory::write_byte(addingIntAddress, 0x00, __FUNCTION__);
@@ -602,12 +611,13 @@ void Quests_class::changeFlag()
 			intsToChange.erase(intsToChange.begin());
 		}
 
-		if (itemsToAdd.size() > 0)
+		if (!itemsToAdd.empty() && itemReady)
 		{
 			Memory::write_string(itemFlagAddress, itemsToAdd[0], 0x41, __FUNCTION__);
 			Memory::write_byte(addingItemAddress, 0x00, __FUNCTION__);
 			itemsToAdd.erase(itemsToAdd.begin());
 		}
+        guard.unlock(); Sleep(10);
 	}
 }
 

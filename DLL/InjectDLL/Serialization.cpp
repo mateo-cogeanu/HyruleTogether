@@ -70,6 +70,11 @@ DTO::ServerDTO* Serializer::DeserializeServerData(byte* inputBytes)
 	result->DeathSwapData = DeserializeDeathSwapData(input);
 	result->TeleportData = DeserializeTeleportData(input);
 	result->PropHuntData = DeserializePropHuntData(input);
+    if (currentIndex >= 0 && currentIndex + 4 <= 7168 && input[currentIndex] == 0x48 && input[currentIndex + 1] == 0x31) {
+        const unsigned size = input[currentIndex + 2] | (unsigned(input[currentIndex + 3]) << 8);
+        if (size <= 2048 && currentIndex + 4 + size <= 7168)
+            result->SharedItems.assign(reinterpret_cast<const char*>(input.data() + currentIndex + 4), size);
+    }
 
 	return result;
 }
@@ -566,6 +571,11 @@ void Serializer::SerializeClientData(byte* outputArray, DTO::ClientDTO* input)
 	SerializeCharacterData(input->PlayerData);
 	SerializeEnemyData(input->EnemyData);
 	SerializeQuestData(input->QuestData);
+    if (!input->SharedItems.empty() && input->SharedItems.size() <= 2048 && currentIndex + 4 + input->SharedItems.size() <= 7168) {
+        const byte header[] = {0x48, 0x31, byte(input->SharedItems.size()), byte(input->SharedItems.size() >> 8)};
+        copyData(ClientData + currentIndex, header, 4);
+        copyData(ClientData + currentIndex, input->SharedItems.data(), input->SharedItems.size());
+    }
 
 	memcpy(outputArray, &ClientData[0], 7168);
 }

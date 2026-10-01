@@ -93,7 +93,7 @@ namespace BOTWM.Server.ServerClasses
             }
         }
 
-        public List<string> GetPlayerQuests(int playerNumber)
+        public List<string> GetPlayerQuests(int playerNumber, int byteBudget = int.MaxValue)
         {
             List<string> PlayerQuests = new List<string>();
 
@@ -105,6 +105,9 @@ namespace BOTWM.Server.ServerClasses
                     if (Queue[playerNumber].Count == 0)
                         break;
 
+                    int size = 1 + System.Text.Encoding.UTF8.GetByteCount(Queue[playerNumber][0]);
+                    if (size > byteBudget) break;
+                    byteBudget -= size;
                     PlayerQuests.Add(Queue[playerNumber][0]);
                     Queue[playerNumber].RemoveAt(0);
                 }

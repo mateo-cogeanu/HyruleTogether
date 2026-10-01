@@ -30,6 +30,7 @@ namespace BOTWM.Server.JSONBuilder
             string SerializedJson = JsonConvert.SerializeObject(GetJson(typeof(ServerDTO)));
 
             ServerDTO Object = JsonConvert.DeserializeObject<ServerDTO>(SerializedJson);
+            Object.SharedItems = ReadItems();
 
             return Object;
         }
@@ -53,6 +54,7 @@ namespace BOTWM.Server.JSONBuilder
                 string SerializedJson = JsonConvert.SerializeObject(GetJson(typeof(ClientDTO)));
 
                 Object = JsonConvert.DeserializeObject<ClientDTO>(SerializedJson);
+                ((ClientDTO)Object).SharedItems = ReadItems();
             }
             else if(messageType == MessageType.ping)
             {
@@ -72,10 +74,32 @@ namespace BOTWM.Server.JSONBuilder
 
             GetByteData(original);
 
+            if (original is ServerDTO response) {
+                // Leave older readers' legacy fields unchanged. New clients opt in
+                // with a bounded UTF-8 JSON tail carrying values, never guest pointers.
+                var json = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(response.SharedItems));
+                if (json.Length > 2048 || ByteData.Count + 4 + json.Length > 7168)
+                    throw new InvalidDataException("Shared item packet exceeds the frame budget");
+                ByteData.AddRange(new byte[] { 0x48, 0x31 });
+                ByteData.AddRange(BitConverter.GetBytes((ushort)json.Length));
+                ByteData.AddRange(json);
+            }
+
             if(!debug)
                 ByteData.InsertRange(0, BitConverter.GetBytes((short)ByteData.Count));
 
             return ByteData.ToArray();
+        }
+
+        private List<SharedItem> ReadItems()
+        {
+            if (Data.Length < 2 || Data[0] != 0x48 || Data[1] != 0x31) return new();
+            if (Data.Length < 4) throw new InvalidDataException("Truncated item header");
+            int length = BitConverter.ToUInt16(Data, 2);
+            if (length > 2048 || length > Data.Length - 4) throw new InvalidDataException("Truncated item payload");
+            var items = JsonConvert.DeserializeObject<List<SharedItem>>(Encoding.UTF8.GetString(Data, 4, length));
+            if (items == null || items.Count > 2) throw new InvalidDataException("Invalid item batch");
+            return items;
         }
 
         private object GetJson(Type original)

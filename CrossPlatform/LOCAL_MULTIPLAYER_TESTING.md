@@ -140,10 +140,52 @@ Actor tests reject ignored duplicates, transient overlap, missing erasure, stale
 adoption, and missing/stale activity; repeated notifications of the same address
 do not inflate the count.
 
+## Shared item regression
+
+```sh
+python3 scripts/test-local-gameplay.py --inventory-drops --inventory-pickups --quest-fixture --enemy-fixture
+```
+
+The known copied save drops a Throwing Spear and wood through real inventory
+controls. New checks match stable item IDs on both clients, inspect the peer game
+factory's durability/modifier values, and require both live actors to remain at
+matching positions after five seconds. A creation callback followed by immediate
+erasure cannot pass. The pickup check requires completed removal of the same item
+on the peer after server confirmation. `--inventory-pickup-client b` tests a peer
+picking up A's drop. Its first run failed; the repeat now clears interaction state
+before/after pickup and passes.
+Do not infer pickup success from sending a controller button.
+
+The protocol carries only verified value parameters in a 2,048-byte optional
+tail. New clients rebuild guest key storage locally. The server retains queued
+updates that cannot fit, supplies snapshots/tombstones to late joiners, and binds
+creator authority to connection sessions rather than reusable player slots.
+A snapshot with an unknown identity must spawn even if its old owner slot now
+belongs to the receiving client. Native tests cover this case; reconnect gameplay
+has not yet been certified.
+
+`20261001-184117` passes all 25 checks available in that run, including persistent
+peer spear/wood and owner pickup cleanup. `20261001-185019` adds and passes peer
+factory metadata checks, but fails reverse pickup and later B input checks; its
+report remains failed. Earlier callback-only evidence overstated wood lifetime:
+removing local carry initialization from replica spawn packs fixes its immediate
+removal. The current checks include lifetime verification. `20261001-190344` passes all 26
+checks with owner pickup, peer metadata, persistent positions, and the existing
+bidirectional player/arrow and synthetic enemy/quest checks. The reverse-pickup
+repeat `20261001-191846` also passes all 26 checks, requiring B's completed pickup
+and A's erase of the same shared item.
+
+Remaining item work includes arbitrary food/special-item metadata, distinguishing
+long-held material props and every unload/delete cause, shared physics updates,
+and arbitrating simultaneous pickups before either game adds to inventory.
+Enemy packets still contain health only. Enemy AI/attacks, concurrent damage,
+quest dialogue/rewards/journal/stages, and authentic sword/shield attachment timing
+are separate unfinished work. Android remains paused.
+
 ## Current evidence — 2026-10-01
 
-- The current harness has ten passing tests, including real
-  UDP controller isolation and negative fixture readback cases. Ten server tests pass.
+- The current harness has twelve passing tests, including real
+  UDP controller isolation and negative fixture readback cases. Sixteen server tests pass.
 - `python3 scripts/test-local-gameplay.py --quest-fixture --enemy-fixture` enables
   synthetic writes only in the isolated test clients: A marks quest V1365
   (`HatenoMini_CameraBoy_Activated`) and reduces a baseline Bokoblin from 13 HP

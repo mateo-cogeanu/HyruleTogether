@@ -89,4 +89,18 @@ public class SharedWorldShould
         Assert.Empty(enemies.GetQueue(0));
     }
 
+    [Fact]
+    public void KeepEnemyAndQuestUpdatesWhenTheFrameHasNoRoom()
+    {
+        var enemies = new Enemy(2, true);
+        enemies.Update(new EnemyDTO { Health = new() { new EnemyData(42, 10) } });
+        Assert.Empty(enemies.GetQueue(0, 0));
+        Assert.Equal(42, Assert.Single(enemies.GetQueue(0, 1)).Hash);
+        var quests = new Quests(2, true);
+        quests.ProcessQuests(new List<string> { "V1365", "V12" });
+        Assert.Empty(quests.GetPlayerQuests(0, 5));
+        Assert.Equal("V1365", Assert.Single(quests.GetPlayerQuests(0, 6)));
+        Assert.Equal("V12", Assert.Single(quests.GetPlayerQuests(0, 4)));
+    }
+
 }

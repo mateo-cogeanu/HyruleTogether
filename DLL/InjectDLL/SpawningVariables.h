@@ -15,6 +15,7 @@
 #include "Game.h"
 #include "TestTelemetry.h"
 #include "ActorSpawnParams.h"
+#include "SharedItems.h"
 
 // This stuff here was yoinked from BetterVR
 // -----------------------------------------
@@ -159,7 +160,8 @@ enum class PendingDispatchKind
 	Spawn,
 	ActorDelete,
 	Animation,
-	EquipmentState
+	EquipmentState,
+	ItemDelete
 };
 
 PendingDispatchKind pending_dispatch_kind = PendingDispatchKind::None;
@@ -222,6 +224,7 @@ const char* PendingDispatchLabel(PendingDispatchKind kind)
 	case PendingDispatchKind::ActorDelete: return "Actor refresh";
 	case PendingDispatchKind::Animation: return "Animation";
 	case PendingDispatchKind::EquipmentState: return "Equipment state";
+	case PendingDispatchKind::ItemDelete: return "Item removal";
 	default: return "Dispatch";
 	}
 }
@@ -297,6 +300,8 @@ std::string ReadProbeString(uint32_t address)
 	return {};
 }
 
+#include "SharedItemRuntime.h"
+
 void ObserveItemFactoryRequest(const std::string& name, PPCInterpreter_t* hCPU)
 {
 	if (!TestTelemetry::enabled() || !std::getenv("HYRULE_TEST_ITEM_PROBE") ||
@@ -353,6 +358,7 @@ void ResolveEquipmentActor(PPCInterpreter_t* hCPU)
 	const uint64_t nameAddress = Main::baseAddr + hCPU->gpr[4];
 	const std::string placeholder = Memory::read_string(nameAddress, 64, __FUNCTION__);
 	ObserveItemFactoryRequest(placeholder, hCPU);
+	CaptureSharedItem(placeholder, hCPU);
 	int playerNumber = 0;
 	if (!TryParseEquipmentPlaceholder(placeholder, playerNumber))
 		return;
@@ -1455,6 +1461,9 @@ void mainFn(PPCInterpreter_t* hCPU, uint32_t startTrnsData, uint32_t startRingBu
 			endRingBuffer,
 			baseAddress);
 	}
+	else if (setupSharedItem(trnsData, startRingBuffer, endRingBuffer)) {
+		// Item work follows equipment changes so a drop burst cannot delay draws.
+	}
 	else if (!queuedAnimations.empty()) {
 		setupAnimation(
 			hCPU,
@@ -1549,6 +1558,7 @@ void OnActorCreate(PPCInterpreter_t* hCPU)
 		json.Key("name"); json.String(name.c_str());
 		json.Key("actor"); json.Uint(hCPU->gpr[3]);
 	}, true);
+	SharedItemCreated(name, hCPU->gpr[3]);
 	LogEquipmentChildCreation(name, hCPU->gpr[3]);
 	ObserveArrowCreation(name, hCPU->gpr[3]);
 	if (name.rfind("Weapon_", 0) == 0)
@@ -1760,6 +1770,7 @@ void OnActorErase(PPCInterpreter_t* hCPU)
 	// Wii U v208 ActorCreator::eraseActor(this, actor): r3 is the creator,
 	// r4 is the actor. Using r3 silently misses every player/projectile erase.
 	std::string name = Memory::read_string(Main::baseAddr + hCPU->gpr[4] + 0x10, 100, __FUNCTION__);
+	SharedItemErased(hCPU->gpr[4]);
 	ObserveArrowErase(name, hCPU->gpr[4]);
 
 	std::vector<std::string> BombChoices = {"CustomRemoteBomb", "CustomRemoteBomb2", "CustomRemoteBombCube", "CustomRemoteBombCube2"};
@@ -2106,6 +2117,7 @@ void init() {
 	// Clear native actor state only after BOTW actually erases the actor. The
 	// earlier deleteLater hook can run inside the shared PPC dispatcher and must
 	// not recursively mutate lifecycle state before that call returns.
+	osLib_registerHLEFunction("ukl_actorinterceptor", "OnActorDeleteLater", &OnSharedItemDeleteLater);
 	osLib_registerHLEFunction("ukl_actorinterceptor", "OnActorErase", static_cast<void (*) (PPCInterpreter_t*)>(&OnActorErase));
 	osLib_registerHLEFunction("ukl_remotebombaiinterceptor", "OnCalc", &remoteBomb_onAICalc);
 	osLib_registerHLEFunction("ukl_timemgrinterceptor", "OnInit", &timemgr_OnInit);

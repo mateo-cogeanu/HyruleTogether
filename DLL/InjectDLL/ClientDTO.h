@@ -16,6 +16,7 @@ namespace DTO
 		ClientCharacterDTO* PlayerData;
 		EnemyDTO* EnemyData;
 		QuestDTO* QuestData;
+        std::string SharedItems;
 	};
 
 }

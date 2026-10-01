@@ -38,6 +38,7 @@ namespace BOTWM.Server.ServerClasses
         public static List<Player> PlayerList;
         public static Enemy EnemyData;
         public static Quests QuestData;
+        public static SharedItems ItemData;
         public static DeathSwapSettings DeathSwap;
         public static Teleport TeleportData;
         public static PropHunt PropHuntData;
@@ -45,7 +46,12 @@ namespace BOTWM.Server.ServerClasses
         static List<List<bool>> Updated = new List<List<bool>>();
         static List<DeathSwapDTO> DeathSwapQueue = new List<DeathSwapDTO>();
 
-        static Mutex DataMutex = new Mutex();
+        static readonly object DataMutex = new();
+        readonly struct DataLock : IDisposable {
+            readonly object gate;
+            public DataLock(object gate) { this.gate = gate; Monitor.Enter(gate); }
+            public void Dispose() => Monitor.Exit(gate);
+        }
         public static Mutex DeathSwapMutex = new Mutex();
 
         static public void Startup(string ip, int port, string password, string description, ServerSettings settings)
@@ -66,6 +72,7 @@ namespace BOTWM.Server.ServerClasses
             }
 
             EnemyData = new Enemy(PLAYERLIMIT, settings.EnemySync);
+            ItemData = new SharedItems(PLAYERLIMIT);
             QuestData = new Quests(PLAYERLIMIT, settings.QuestSyncSettings.AnyTrue);
             NameData = new Names(PLAYERLIMIT);
             ModelData = new Models(PLAYERLIMIT);
@@ -85,13 +92,12 @@ namespace BOTWM.Server.ServerClasses
 
         static public void UpdateWorldData(WorldDTO userData, int playerNumber)
         {
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
 
             WorldData.UpdateTime(userData);
 
             if (playerNumber != -1 && WorldData.isForcedWeather)
             {
-                DataMutex.ReleaseMutex();
                 return;
             }
 
@@ -99,14 +105,12 @@ namespace BOTWM.Server.ServerClasses
             {
                 if (PlayerList[i].Connected)
                 {
-                    DataMutex.ReleaseMutex();
                     return;
                 }
             }
 
             WorldData.UpdateWeather(userData);
 
-            DataMutex.ReleaseMutex();
         }
 
         static public void UpdatePlayerData(ClientPlayerDTO userData, int playerNumber)
@@ -116,7 +120,7 @@ namespace BOTWM.Server.ServerClasses
 
             //TODO: Implement animation mapping
 
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
             PlayerList[playerNumber].Update(userData);
 
             foreach(List<bool> UpdatedList in Updated)
@@ -153,26 +157,23 @@ namespace BOTWM.Server.ServerClasses
                 }
             }
 
-            DataMutex.ReleaseMutex();
         }
 
         static public void UpdateEnemyData(EnemyDTO userData)
         {
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
             EnemyData.Update(userData);
-            DataMutex.ReleaseMutex();
         }
 
         static public void UpdateQuestData(QuestsDTO userData)
         {
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
             QuestData.Update(userData);
-            DataMutex.ReleaseMutex();
         }
 
         static public void SetConnection(int playerNumber, bool status)
         {
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
             if (status)
                 PlayerList[playerNumber].Connected = true;
             else
@@ -183,14 +184,12 @@ namespace BOTWM.Server.ServerClasses
                 PropHuntData.Players.Remove((byte)playerNumber);
                 PropHuntData.UpdateStatus();
             }
-            DataMutex.ReleaseMutex();
         }
 
         static public void ProcessExternalQuests(List<string> Quests)
         {
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
             QuestData.ProcessQuests(Quests);
-            DataMutex.ReleaseMutex();
         }
 
         #endregion
@@ -201,7 +200,7 @@ namespace BOTWM.Server.ServerClasses
         {
             ServerDTO serverInformation = new ServerDTO();
 
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
 
             serverInformation.WorldData.Time = WorldData.Time;
             serverInformation.WorldData.Day = WorldData.Day;
@@ -240,8 +239,8 @@ namespace BOTWM.Server.ServerClasses
                 }
             }
 
-            serverInformation.EnemyData.Health = EnemyData.GetQueue(playerNumber);
-            serverInformation.QuestData.Completed = QuestData.GetPlayerQuests(playerNumber);
+            serverInformation.EnemyData.Health = new();
+            serverInformation.QuestData.Completed = new();
 
             DeathSwapMutex.WaitOne(100);
             serverInformation.DeathSwapData = DeathSwapQueue[playerNumber];
@@ -255,8 +254,13 @@ namespace BOTWM.Server.ServerClasses
             }
 
             serverInformation.PropHuntData = PropHuntData.GetData((byte)playerNumber);
-
-            DataMutex.ReleaseMutex();
+            // Budget before draining queues; unsent updates remain queued when
+            // player/model data leaves less room in the fixed client frame.
+            int baseSize = new JSONBuilder.JSONBuilder().BuildArrayOfBytes(serverInformation, true).Length;
+            int budget = Math.Max(0, 7168 - baseSize);
+            serverInformation.EnemyData.Health = EnemyData.GetQueue(playerNumber, budget / 8);
+            budget -= serverInformation.EnemyData.Health.Count * 8;
+            serverInformation.QuestData.Completed = QuestData.GetPlayerQuests(playerNumber, budget);
 
             return serverInformation;
         }
@@ -277,7 +281,7 @@ namespace BOTWM.Server.ServerClasses
             if (Configuration.PASSWORD != "" && Configuration.PASSWORD != UserConfiguration.Password)
                 return new ConnectResponseDTO() { Response = 3, Reason = "Incorrect server password" };
 
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
 
             int counter = 0;
             int playerNumber = -1;
@@ -296,7 +300,6 @@ namespace BOTWM.Server.ServerClasses
                 counter++;  
             }
 
-            DataMutex.ReleaseMutex();
 
             if (playerNumber == -1)
                 return new ConnectResponseDTO() { Response = 2, Reason = "The server is full" };
@@ -305,6 +308,7 @@ namespace BOTWM.Server.ServerClasses
             ModelData.AddModel((byte)playerNumber, UserConfiguration.ModelData);
 
             EnemyData.FillQueue(playerNumber);
+            ItemData.Connect(playerNumber);
             QuestData.FillQueue(playerNumber);
             NameData.FillQueue(playerNumber);
             ModelData.FillQueue(playerNumber);
@@ -321,9 +325,8 @@ namespace BOTWM.Server.ServerClasses
 
         static public Player GetPlayer(int playerNumber)
         {
-            DataMutex.WaitOne(100);
+            using var dataLock = new DataLock(DataMutex);
             Player result = PlayerList[playerNumber];
-            DataMutex.ReleaseMutex();
 
             return result;
         }

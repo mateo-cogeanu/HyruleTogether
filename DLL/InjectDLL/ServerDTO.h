@@ -16,6 +16,7 @@ namespace DTO
 	class ServerDTO
 	{
 	public:
+        std::string SharedItems; // Versioned optional tail, outside the legacy fields.
 		WorldDTO* WorldData;
 		NamesDTO* NameData;
 		ModelsDTO* ModelData;
