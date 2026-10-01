@@ -4,6 +4,12 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### README refresh and desktop build target names
+
+- Rewrite the project README around the current desktop launcher, setup, build commands, multiplayer progress, testing, and credits. Mark unfinished synchronization and paused Android development accurately, link the existing license notice, and finish with the Nintendo non-endorsement disclaimer.
+- Rename `scripts/build-bundled-launcher.sh` to `scripts/build.sh`. Use `mac_64`, `mac_aarch64`, `linux_64`, and `linux_aarch64` consistently for launcher packages, native Cemu installs, and UKMM builds. Apple Silicon retains Metal; underlying architecture flags and .NET runtime identifiers remain unchanged.
+- Update desktop documentation and launcher host detection to the new names. Normalize saved legacy runtime names and discover existing legacy runtime installations so the rename does not break development setups. All seven launcher tests pass, including migration and runtime discovery regressions; shell syntax, target usage, host mismatch guards, and four-platform host detection checks pass. Full packages were not rebuilt for this rename.
+
 ### Combined enemy damage and attached-item filtering
 
 - Negotiate enemy damage deltas in the JSON connection response. Updated clients send their initial tracked health once, then encode bounded local damage in the reserved `INT_MIN + damage` range of the existing enemy-health field. Server replies remain absolute health; older servers retain the client's legacy minimum-health behavior.

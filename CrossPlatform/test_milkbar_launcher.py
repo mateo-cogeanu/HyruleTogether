@@ -1,9 +1,45 @@
+import json
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from unittest.mock import patch
 
 import milkbar_launcher as launcher
+
+
+class RuntimeCompatibilityTests(unittest.TestCase):
+    def test_saved_legacy_runtime_keeps_existing_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            config_path = Path(temp) / "config.json"
+            for legacy, current in launcher.LEGACY_CEMU_RUNTIMES.items():
+                with self.subTest(runtime=legacy):
+                    config_path.write_text(json.dumps({
+                        "cemu_runtime": legacy,
+                        "cemu": "/existing/Cemu",
+                    }), encoding="utf-8")
+                    with patch.object(launcher, "config_path", return_value=config_path), \
+                         patch.object(launcher, "defaults", return_value={}), \
+                         patch.object(launcher, "bundled_cemu_executable", return_value=None), \
+                         patch.object(launcher, "bundled_client_library", return_value=None):
+                        config = launcher.load_config()
+                    self.assertEqual(config["cemu_runtime"], current)
+                    self.assertEqual(config["cemu"], "/existing/Cemu")
+
+    def test_discovery_prefers_new_install_and_falls_back_to_legacy(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            legacy = root / "runtimes/cemu/Linux_x86_64/Cemu"
+            current = root / "runtimes/cemu/linux_64/Cemu"
+            legacy.parent.mkdir(parents=True)
+            legacy.touch()
+            with patch.object(launcher, "data_directory", return_value=root), \
+                 patch.object(launcher, "host_cemu_runtime", return_value="linux_64"), \
+                 patch.object(launcher, "bundled_cemu_executable", return_value=None):
+                self.assertEqual(launcher.discover_cemu(), str(legacy))
+                current.parent.mkdir(parents=True)
+                current.touch()
+                self.assertEqual(launcher.discover_cemu(), str(current))
 
 
 class CemuGraphicPackSettingsTests(unittest.TestCase):

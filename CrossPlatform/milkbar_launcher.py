@@ -20,10 +20,19 @@ from typing import Any
 ROOT = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
 APPDATA_FILES = ROOT / "WPF .NET 6" / "Breath of the Wild Multiplayer" / "AppdataFiles"
 CEMU_RUNTIMES = {
-    "mac_x86_64": "Mac x86_64",
-    "mac_arm64_Metal": "Mac arm64 — Metal",
-    "Linux_x86_64": "Linux x86_64",
-    "Linux_arm64": "Linux arm64",
+    "mac_64": "Mac x86_64",
+    "mac_aarch64": "Mac arm64 — Metal",
+    "linux_64": "Linux x86_64",
+    "linux_aarch64": "Linux arm64",
+}
+
+# Keep saved development configurations and installed runtimes usable after
+# the public build targets were renamed.
+LEGACY_CEMU_RUNTIMES = {
+    "mac_x86_64": "mac_64",
+    "mac_arm64_Metal": "mac_aarch64",
+    "Linux_x86_64": "linux_64",
+    "Linux_arm64": "linux_aarch64",
 }
 
 UKMM_DEPLOYMENT_SCHEMA = b"animation-eventflow-retry-v4"
@@ -197,8 +206,8 @@ def bundled_mod_archive() -> Path | None:
 def host_cemu_runtime() -> str:
     machine = platform.machine().lower()
     if sys.platform == "darwin":
-        return "mac_arm64_Metal" if machine in ("arm64", "aarch64") else "mac_x86_64"
-    return "Linux_arm64" if machine in ("arm64", "aarch64") else "Linux_x86_64"
+        return "mac_aarch64" if machine in ("arm64", "aarch64") else "mac_64"
+    return "linux_aarch64" if machine in ("arm64", "aarch64") else "linux_64"
 
 
 def managed_cemu_executable(runtime: str) -> Path:
@@ -228,6 +237,11 @@ def discover_cemu() -> str:
     managed = managed_cemu_executable(host_cemu_runtime())
     if managed.is_file():
         return str(managed)
+    for legacy, current in LEGACY_CEMU_RUNTIMES.items():
+        if current == host_cemu_runtime():
+            previous = managed_cemu_executable(legacy)
+            if previous.is_file():
+                return str(previous)
     configured = os.environ.get("CEMU_PATH")
     if configured:
         return configured
@@ -266,6 +280,8 @@ def load_config() -> dict[str, Any]:
     path = config_path()
     if path.exists():
         result.update(json.loads(path.read_text(encoding="utf-8")))
+    runtime = result.get("cemu_runtime")
+    result["cemu_runtime"] = LEGACY_CEMU_RUNTIMES.get(runtime, runtime)
     bundled_cemu = bundled_cemu_executable()
     bundled_client = bundled_client_library()
     if bundled_cemu and bundled_client:

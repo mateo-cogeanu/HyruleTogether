@@ -7,26 +7,26 @@ source_root="${MILKBAR_CEMU_SOURCE:-$root/.tools/Cemu}"
 display_backend="native"
 
 case "$target" in
-  mac_x86_64)
+  mac_64)
     expected_os="Darwin"; expected_arch="x86_64"; cmake_arch="x86_64"
     platform_flags=(-DMACOS_BUNDLE=ON -DENABLE_METAL=OFF -DENABLE_VULKAN=ON)
     ;;
-  mac_arm64_Metal)
+  mac_aarch64)
     expected_os="Darwin"; expected_arch="arm64"; cmake_arch="arm64"
     # Current Cemu shares a few shader-stage definitions with its Vulkan
     # sources, so keep Vulkan compiled while selecting Metal at runtime.
     platform_flags=(-DMACOS_BUNDLE=ON -DENABLE_METAL=ON -DENABLE_VULKAN=ON -DENABLE_OPENGL=OFF)
     ;;
-  Linux_x86_64)
+  linux_64)
     expected_os="Linux"; expected_arch="x86_64"; cmake_arch=""
     platform_flags=()
     ;;
-  Linux_arm64)
+  linux_aarch64)
     expected_os="Linux"; expected_arch="arm64"; cmake_arch=""
     platform_flags=()
     ;;
   *)
-    echo "Usage: $0 {mac_x86_64|mac_arm64_Metal|Linux_x86_64|Linux_arm64}" >&2
+    echo "Usage: $0 {mac_64|mac_aarch64|linux_64|linux_aarch64}" >&2
     exit 2
     ;;
 esac
@@ -77,7 +77,7 @@ else
 fi
 
 "$root/scripts/patch-cemu.sh" "$source_root"
-if [[ "$target" == "mac_arm64_Metal" ]]; then
+if [[ "$target" == "mac_aarch64" ]]; then
   build_root="$source_root/build-milkbar-arm64-metal"
 else
   build_root="$source_root/build-milkbar-$target"

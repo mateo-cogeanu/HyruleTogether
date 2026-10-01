@@ -5,11 +5,11 @@ root="$(cd "$(dirname "$0")/.." && pwd)"
 target="${1:-}"
 
 case "$target" in
-  mac_x86_64) server_rid="osx-x64"; expected_os="Darwin"; expected_arch="x86_64"; client_ext="dylib" ;;
-  mac_arm64_Metal) server_rid="osx-arm64"; expected_os="Darwin"; expected_arch="arm64"; client_ext="dylib" ;;
-  Linux_x86_64) server_rid="linux-x64"; expected_os="Linux"; expected_arch="x86_64"; client_ext="so" ;;
-  Linux_arm64) server_rid="linux-arm64"; expected_os="Linux"; expected_arch="arm64"; client_ext="so" ;;
-  *) echo "Usage: $0 {mac_x86_64|mac_arm64_Metal|Linux_x86_64|Linux_arm64}" >&2; exit 2 ;;
+  mac_64) server_rid="osx-x64"; expected_os="Darwin"; expected_arch="x86_64"; client_ext="dylib" ;;
+  mac_aarch64) server_rid="osx-arm64"; expected_os="Darwin"; expected_arch="arm64"; client_ext="dylib" ;;
+  linux_64) server_rid="linux-x64"; expected_os="Linux"; expected_arch="x86_64"; client_ext="so" ;;
+  linux_aarch64) server_rid="linux-arm64"; expected_os="Linux"; expected_arch="arm64"; client_ext="so" ;;
+  *) echo "Usage: $0 {mac_64|mac_aarch64|linux_64|linux_aarch64}" >&2; exit 2 ;;
 esac
 
 host_os="$(uname -s)"

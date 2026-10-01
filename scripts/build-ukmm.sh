@@ -6,11 +6,11 @@ target="${1:-}"
 source_root="${MILKBAR_UKMM_SOURCE:-$root/.tools/UKMM}"
 
 case "$target" in
-  mac_x86_64) expected_os="Darwin"; expected_arch="x86_64" ;;
-  mac_arm64_Metal) expected_os="Darwin"; expected_arch="arm64" ;;
-  Linux_x86_64) expected_os="Linux"; expected_arch="x86_64" ;;
-  Linux_arm64) expected_os="Linux"; expected_arch="arm64" ;;
-  *) echo "Usage: $0 {mac_x86_64|mac_arm64_Metal|Linux_x86_64|Linux_arm64}" >&2; exit 2 ;;
+  mac_64) expected_os="Darwin"; expected_arch="x86_64" ;;
+  mac_aarch64) expected_os="Darwin"; expected_arch="arm64" ;;
+  linux_64) expected_os="Linux"; expected_arch="x86_64" ;;
+  linux_aarch64) expected_os="Linux"; expected_arch="arm64" ;;
+  *) echo "Usage: $0 {mac_64|mac_aarch64|linux_64|linux_aarch64}" >&2; exit 2 ;;
 esac
 
 host_arch="$(uname -m)"

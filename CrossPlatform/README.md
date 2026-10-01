@@ -13,10 +13,10 @@ Python environment, installs packaging dependencies, and builds all native and
 server components, so `setup-cross-platform.sh` is not required first:
 
 ```sh
-./scripts/build-bundled-launcher.sh mac_x86_64
-./scripts/build-bundled-launcher.sh mac_arm64_Metal
-./scripts/build-bundled-launcher.sh Linux_x86_64
-./scripts/build-bundled-launcher.sh Linux_arm64
+./scripts/build.sh mac_64
+./scripts/build.sh mac_aarch64
+./scripts/build.sh linux_64
+./scripts/build.sh linux_aarch64
 ```
 
 Run the command matching the build computer. Cemu links native graphics,
@@ -107,7 +107,7 @@ python3 -m pip install -r CrossPlatform/requirements.txt
 # Open the graphical launcher
 ./scripts/run-gui.sh
 
-./scripts/install-patched-cemu.sh mac_arm64_Metal
+./scripts/install-patched-cemu.sh mac_aarch64
 ```
 
 The Qt GUI paints one BOTW background once at the window root. Every panel,
