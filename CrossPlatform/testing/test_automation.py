@@ -23,6 +23,33 @@ def request(kind, body=b''):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_inventory_capture_rejects_equipment_and_missing_item_metadata(self):
+        def row(name, life='000007d0', extra=None, at=100):
+            params = [dict(key='IsPlayerPut', type=3, bytes='00' if name.startswith('Weapon_') else '01'),
+                      dict(key='@M', type=7, bytes='00'*48)]
+            if name.startswith('Weapon_'):
+                params.append(dict(key='Life', type=0, bytes=life))
+            else:
+                params.append(dict(key='@I', type=0, bytes='00000003'))
+            if extra:
+                params.append(dict(key=extra, type=3, bytes='01'))
+            return dict(time_ms=at, name=name, packs=[dict(params=params)])
+        spear, wood = row('Weapon_Spear_030'), row('Obj_FireWoodBundle')
+        def passed(rows):
+            # A second material creation follows returning from inventory and
+            # releasing the held prop. A held prop alone must not pass.
+            return gameplay.inventory_drop_result(rows + [row('Obj_FireWoodBundle', at=101)], 90, 110)['passed']
+        self.assertTrue(passed([spear, wood]))
+        self.assertFalse(passed([spear]))
+        self.assertFalse(passed([row('Weapon_Spear_030', at=80), wood]))
+        self.assertFalse(passed([row('Weapon_Spear_030', life='ffffffff'), wood]))
+        for flag in ('@PC', '@ND', '@D'):
+            self.assertFalse(passed([row('Weapon_Spear_030', extra=flag), wood]))
+        malformed = row('Obj_FireWoodBundle')
+        malformed['packs'][0]['params'][-1]['bytes'] = '00'
+        self.assertFalse(passed([spear, malformed]))
+        self.assertFalse(gameplay.inventory_drop_result([spear, wood], 90, 110)['passed'])
+
     def test_fixture_requires_the_same_entity_and_a_readback_after_the_write(self):
         source = [dict(time_ms=100, before=0, id='V1365')]
         peer = dict(time_ms=101, id='V1365', value=1)

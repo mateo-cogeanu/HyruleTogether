@@ -140,9 +140,9 @@ Actor tests reject ignored duplicates, transient overlap, missing erasure, stale
 adoption, and missing/stale activity; repeated notifications of the same address
 do not inflate the count.
 
-## Current evidence — 2026-09-30
+## Current evidence — 2026-10-01
 
-- The current harness has nine passing tests, including real
+- The current harness has ten passing tests, including real
   UDP controller isolation and negative fixture readback cases. Ten server tests pass.
 - `python3 scripts/test-local-gameplay.py --quest-fixture --enemy-fixture` enables
   synthetic writes only in the isolated test clients: A marks quest V1365
@@ -167,6 +167,24 @@ do not inflate the count.
   subsequent readiness checks fail. The inventory-drop inspection
   `runs/20260930-200416` observed a dropped spear actor but failed this prerequisite
   with the inventory left open. No dropped-item replication assertion exists yet.
+- `--inventory-drops` patches and archives the isolated spawn assembly and scripts
+  inventory navigation, a Throwing Spear drop, and holding/releasing wood. Root
+  tabs are normalized with L,L,R before selecting Inventory; quest events can
+  leave Adventure Log selected. `--inventory-step-hold 5` provides optional pauses
+  for visual diagnosis. The fixture checks local factory capture only, requiring
+  weapon metadata and two wood creation events; it does not test peer creation,
+  item transforms, ownership, or pickup. All ten checker/controller tests and the
+  native bounded spawn-parameter tests pass.
+- The new v208 factory hook exposes the spear's durability/modifiers/transform and
+  wood's carry-box metadata. Wood's actor is `Obj_FireWoodBundle`; materials may
+  lack an initial matrix. Failed reports `runs/20260930-205307` (wrong root tab)
+  and `runs/20260930-210223` (wrong wood checker) remain unchanged, including their
+  failed overall verdicts.
+- `runs/20261001-165758/report.json` passes all 22 checks with
+  `--inventory-drops --quest-fixture --enemy-fixture` and no inspection pauses.
+  This includes local spear/wood capture, synthetic quest/health peer readback,
+  and the existing gameplay/uniqueness/disconnect assertions. It is still not a
+  dropped-item network test or a full combat/quest test.
 - Two consecutive runs (`runs/20260930-172300/report.json` and
   `runs/20260930-172556/report.json`) passed all 16 checks available at that point. Both directions
   show movement, jump-animation packets, weapon-data packets, and two airborne
@@ -231,7 +249,7 @@ do not inflate the count.
 
 This is a passing telemetry regression run, not a complete multiplayer verdict.
 Rendered animation/equipment correctness beyond the inspected scene, projectile collisions
-and damage, other arrow types, enemy/quest sync, reconnect cleanup, and sustained
+and damage, other arrow types, shared enemy movement/attacks, quest dialogue/rewards, reconnect cleanup, and sustained
 performance still need testing. No Linux or Android gameplay result is claimed.
 
 ## Gameplay pass

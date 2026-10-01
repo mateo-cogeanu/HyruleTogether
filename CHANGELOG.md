@@ -4,6 +4,14 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Inventory-drop capture and automated inventory actions
+
+- Intercept the additional Wii U v208 actor-creation wrapper used for inventory items; the original equipment/map wrappers missed this path. Add opt-in, read-only factory telemetry with checked guest strings and complete bounded spawn-parameter decoding. Guest pointers remain local and are not transmitted.
+- Capture a dropped Throwing Spear's raw durability, modifiers, scale, and transform. Wood uses `Obj_FireWoodBundle` with carry-box parameters (`IsPlayerPut`, `@I`), rather than a weapon-style transform. This is local creation evidence; network replication, pickup ownership, and live item physics remain unimplemented.
+- Add `--inventory-drops` to script spear and wood drops on the isolated save baseline. Normalize the pause menu to Inventory because quest updates can leave Adventure Log selected; allow menu animations to settle and require both held/released wood creations. Archive the patched spawn assembly with each fixture run. Add negative checks for held-only material props, invalid durability, equipment children, and missing metadata.
+- Add native spawn-parameter tests for truncated buffers, invalid keys/types, unterminated strings, callback pointer width, and size limits. Native protocol tests and all ten harness unit tests pass. Retain failed runs: `20260930-205307` navigated the wrong root tab; `20260930-210223` captured the drops but its checker used the wrong wood actor name/layout. Neither was a passing full run.
+- The corrected unattended macOS run `20261001-165758` passes all 22 checks: local spear/wood capture, synthetic peer quest/health readback, and the existing movement, jump, equipment packets, arrows, actor uniqueness, and disconnect assertions. It uses the patched factory hook in both clients. This does not establish dropped-item replication or full cooperative combat/quest behavior.
+
 ### Equipment, quest flags, and enemy health
 
 - Use the Wii U v208 Hold equipment helper to resolve the actor's live weapon profile; the previous call cleared the animation parameter instead. Restrict the equipment initialization delay to newly created actors, removing the extra delay on every established draw/sheath transition. Authentic shield attachment timing still needs visual verification.

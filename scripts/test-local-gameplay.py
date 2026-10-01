@@ -69,6 +69,35 @@ def fixture_readback(source, peer, kind):
     return None
 
 
+def inventory_drop_result(rows, start, end):
+    found = {}
+    wood_creations = set()
+    for row in rows:
+        if not start <= row['time_ms'] <= end or row['name'] not in ('Weapon_Spear_030', 'Obj_FireWoodBundle'):
+            continue
+        for pack in row['packs']:
+            params = {entry['key']: entry for entry in pack['params']}
+            if '@PC' in params or '@ND' in params or '@D' in params or 'IsPlayerPut' not in params:
+                continue
+            if row['name'] == 'Weapon_Spear_030':
+                transform = params.get('@M', {})
+                if transform.get('type') != 7 or len(transform.get('bytes', '')) != 96:
+                    continue
+                life = params.get('Life', {})
+                if life.get('type') != 0 or len(life.get('bytes', '')) != 8 or int.from_bytes(bytes.fromhex(life['bytes']), 'big', signed=True) <= 0:
+                    continue
+            else:
+                # Materials use the carry-box path, without an initial @M.
+                # Wood is Obj_FireWoodBundle, not the Bird Egg material actor.
+                instance = params.get('@I', {})
+                if params['IsPlayerPut'].get('bytes') != '01' or instance.get('type') != 0 or len(instance.get('bytes', '')) != 8:
+                    continue
+                wood_creations.add(row['time_ms'])
+            found[row['name']] = row
+    return dict(passed=len(found) == 2 and len(wood_creations) >= 2, captured=found, wood_creations=len(wood_creations),
+                scope='Local inventory-drop factory capture only; no peer replication or pickup assertion.')
+
+
 def wait_until(test, seconds, description, alive):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -146,9 +175,13 @@ def main():
     parser.add_argument('--inspection-hold', type=float, default=0, help='Optional pause after movement for visual inspection, in seconds (0 to 60).')
     parser.add_argument('--scenario-window', type=float, default=0, help='Seconds to accept bounded DSU commands from the run input.jsonl file.')
     parser.add_argument('--enemy-fixture', action='store_true', help='Synthetic enemy damage replication in isolated saves.')
+    parser.add_argument('--inventory-drops', action='store_true', help='Script spear/wood drops on the known isolated baseline and verify local factory capture only.')
+    parser.add_argument('--inventory-step-hold', type=float, default=0, help='Optional 0–15 second inspection pause after each inventory button.')
     parser.add_argument('--quest-fixture', action='store_true', help='Opt-in synthetic quest flag replication check in isolated saves.')
     parser.add_argument('--spawn-delay-ms', type=int, default=0, help='Delay the first remote-player spawn for the timeout regression fixture (0 to 30000).')
     args = parser.parse_args()
+    if not math.isfinite(args.inventory_step_hold) or not 0 <= args.inventory_step_hold <= 15:
+        parser.error('--inventory-step-hold must be between 0 and 15 seconds')
     if not 0 <= args.spawn_delay_ms <= 30000:
         parser.error('--spawn-delay-ms must be between 0 and 30000')
     if not math.isfinite(args.scenario_window) or not 0 <= args.scenario_window <= 180:
@@ -188,6 +221,7 @@ def main():
     run.mkdir(parents=True)
     result = dict(passed=False, checks=[], controller_type='Wii U GamePad', spawn_delay_ms=args.spawn_delay_ms,
                   quest_fixture=args.quest_fixture, enemy_fixture=args.enemy_fixture, scenario_window=args.scenario_window,
+                  inventory_drops=args.inventory_drops,
                   scope='Controller-driven game and native synchronization telemetry; synthetic fixtures test transport/application. Visual appearance, dialogue, rewards, and shared enemy AI require separate review.')
     result['revision'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     result['native_client_sha256'] = hashlib.sha256(Path(config['client_library']).read_bytes()).hexdigest()
@@ -224,6 +258,11 @@ def main():
         time.sleep(1); alive()
         for label in ('a', 'b'):
             client = root / label
+            if args.inventory_drops:
+                spawn_patch = client / 'cemu/config/graphicPacks/BreathOfTheWild_UKMM/patch_SpawnActors.asm'
+                subprocess.run([sys.executable, str(ROOT/'scripts/patch-equipment-factory.py'),
+                                str(spawn_patch)], check=True)
+                shutil.copy2(spawn_patch, run/f'{label}-spawn.asm')
             # Keep an immutable baseline so repeated runs do not accumulate autosaves.
             save = client / 'cemu/mlc01/usr/save'
             baseline = root / 'test-baseline' / label / 'save'
@@ -238,6 +277,7 @@ def main():
             write_profile(profile, pads[label].port)
             shutil.copy2(profile, run/f'{label}-controller.xml')
             fixture_env = {}
+            if args.inventory_drops and label == 'a': fixture_env['HYRULE_TEST_ITEM_PROBE'] = '1'
             if args.enemy_fixture and label == 'a': fixture_env['HYRULE_TEST_ENEMY_SOURCE'] = '1'
             if args.quest_fixture:
                 fixture_env['HYRULE_TEST_QUEST_NAME'] = 'HatenoMini_CameraBoy_Activated'
@@ -284,6 +324,41 @@ def main():
         # Checking A then waiting for B can leave A's earlier readiness stale.
         wait_until(playable, 60, 'both clients simultaneously ready', alive)
         check('both_games_playable', passed=True)
+        if args.inventory_drops:
+            start = time.time()*1000
+            def inventory_button(button, settle=1.2):
+                action('a', .2, buttons=[button])
+                action('a', settle)  # Menus animate even while game logic is paused.
+                if args.inventory_step_hold:
+                    print(f'Inventory inspection: {button}', flush=True)
+                    time.sleep(args.inventory_step_hold); alive()
+            def open_inventory():
+                inventory_button('plus')
+                # Plus may reopen the Adventure Log after quest event updates.
+                # The root tabs clamp at the leftmost Adventure Log: L,L,R
+                # therefore selects Inventory regardless of the previous tab.
+                for button in ('l', 'l', 'r'):
+                    inventory_button(button, .5)
+            open_inventory()
+            for _ in range(7):
+                action('a', .18, rx=-1)
+                action('a', .4)
+            for button in ('up', 'left'):
+                for _ in range(5):
+                    action('a', .1, buttons=[button])
+            inventory_button('a')
+            inventory_button('down')
+            inventory_button('a')
+            inventory_button('plus')
+            open_inventory()
+            for _ in range(5):
+                action('a', .18, rx=1)
+                action('a', .6)
+            for button in ('x', 'a', 'b', 'a'):
+                inventory_button(button)
+            time.sleep(2); alive()
+            check('local_inventory_drop_capture', **inventory_drop_result(
+                records(run/'a.jsonl', 'item_factory_request'), start, time.time()*1000))
         if args.scenario_window:
             print(f'Scenario input ready: {run / "input.jsonl"}', flush=True)
             deadline = time.monotonic() + args.scenario_window
@@ -294,6 +369,8 @@ def main():
                 if input_path.exists():
                     lines = input_path.read_text().splitlines()
                     for line in lines[processed:]:
+                        if time.monotonic() >= deadline:
+                            break
                         command = json.loads(line)
                         label, duration = command['client'], float(command['duration'])
                         if label not in pads or not math.isfinite(duration) or not 0 <= duration <= 10:

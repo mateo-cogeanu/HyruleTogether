@@ -14,6 +14,7 @@
 #include "Entities.h"
 #include "Game.h"
 #include "TestTelemetry.h"
+#include "ActorSpawnParams.h"
 
 // This stuff here was yoinked from BetterVR
 // -----------------------------------------
@@ -277,6 +278,72 @@ bool TryParseEquipmentPlaceholder(const std::string& name, int& playerNumber)
 	return true;
 }
 
+// Read-only inventory-drop investigation. These are guest pointers; every read
+// is bounded and checked before the test-only recorder inspects factory params.
+std::string ReadProbeString(uint32_t address)
+{
+	std::string result;
+	if (!address) return result;
+	for (uint64_t offset = 0; offset < 80; offset += 4) {
+		uint32_t word = 0;
+		if (!Memory::TryReadBigEndian4BytesOffset(uint64_t(address) + offset, word)) return {};
+		for (int shift = 24; shift >= 0; shift -= 8) {
+			const unsigned char c = (word >> shift) & 255;
+			if (!c) return result;
+			if (c < 32 || c > 126) return {};
+			result += char(c);
+		}
+	}
+	return {};
+}
+
+void ObserveItemFactoryRequest(const std::string& name, PPCInterpreter_t* hCPU)
+{
+	if (!TestTelemetry::enabled() || !std::getenv("HYRULE_TEST_ITEM_PROBE") ||
+		(name.rfind("Item_", 0) && name.rfind("Weapon_", 0) && name.rfind("Obj_", 0))) return;
+	TestTelemetry::emit("item_factory_request", -1, [&](auto& json) {
+		json.Key("name"); json.String(name.c_str());
+		json.Key("registers"); json.StartArray();
+		for (int i = 3; i <= 10; ++i) json.Uint(hCPU->gpr[i]);
+		json.EndArray();
+		// createActor_ at 0x037b5be0 receives an InstParamPack in r6;
+		// requestCreateActor at 0x037b6040 has other arguments. Record only
+		// buffers which satisfy the complete Wii U pack header/layout checks.
+		json.Key("packs"); json.StartArray();
+		for (int reg : {6, 7}) {
+			const uint32_t address = hCPU->gpr[reg];
+			uint32_t proc = 0, header = 0;
+			if (!address || !Memory::TryReadBigEndian4BytesOffset(address, proc) ||
+				!Memory::TryReadBigEndian4BytesOffset(uint64_t(address) + 4, header)) continue;
+			const unsigned count = header >> 16, size = header & 65535;
+			if (!count || count > 24 || !size || size > 192 || size < count * 6) continue;
+			std::vector<byte> data;
+			for (unsigned i = 0; i < size; i += 4) {
+				uint32_t word = 0;
+				if (!Memory::TryReadBigEndian4BytesOffset(uint64_t(address) + 8 + i, word)) { data.clear(); break; }
+				for (int shift = 24; shift >= 0; shift -= 8) data.push_back((word >> shift) & 255);
+			}
+			if (data.size() < size) continue;
+			data.resize(size);
+			std::vector<ActorSpawnParams::Entry> entries;
+			if (!ActorSpawnParams::decode(data, count, ReadProbeString, entries)) continue;
+			json.StartObject(); json.Key("register"); json.Int(reg);
+			json.Key("proc"); json.Uint(proc);
+			json.Key("proc_name"); json.String(ReadProbeString(proc ? proc + 0x10 : 0).c_str());
+			json.Key("count"); json.Uint(count); json.Key("size"); json.Uint(size);
+			json.Key("params"); json.StartArray();
+			for (const auto& entry : entries) {
+				json.StartObject(); json.Key("key"); json.String(entry.key.c_str());
+				json.Key("type"); json.Uint(entry.type);
+				json.Key("bytes"); json.String(Memory::hexStr(entry.value).c_str());
+				json.EndObject();
+			}
+			json.EndArray(); json.EndObject();
+		}
+		json.EndArray();
+	}, true);
+}
+
 void ResolveEquipmentActor(PPCInterpreter_t* hCPU)
 {
 	hCPU->instructionPointer = hCPU->sprNew.LR;
@@ -285,6 +352,7 @@ void ResolveEquipmentActor(PPCInterpreter_t* hCPU)
 
 	const uint64_t nameAddress = Main::baseAddr + hCPU->gpr[4];
 	const std::string placeholder = Memory::read_string(nameAddress, 64, __FUNCTION__);
+	ObserveItemFactoryRequest(placeholder, hCPU);
 	int playerNumber = 0;
 	if (!TryParseEquipmentPlaceholder(placeholder, playerNumber))
 		return;

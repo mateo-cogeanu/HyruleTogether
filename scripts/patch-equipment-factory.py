@@ -5,6 +5,21 @@ from pathlib import Path
 import sys
 
 
+def add_item_factory_hook(text: str) -> str:
+    marker = '; HYRULE_INVENTORY_ITEM_FACTORY_V208'
+    if marker in text:
+        return text
+    start = text.index('EquipmentChildCreateHook:\n')
+    end = text.index('b 0x037b5be4\n', start) + len('b 0x037b5be4\n')
+    hook = text[start:end].replace('EquipmentChildCreateHook:', 'InventoryItemCreateHook:')
+    hook = hook.replace('stwu r1, -40(r1)', 'stwu r1, -48(r1)')
+    hook = hook.replace('b 0x037b5be4', 'b 0x037b5e90')
+    return text + ('\n\n' + marker + '\n'
+                   '; Inventory drops enter the v208 create wrapper with r4=name\n'
+                   '; and r7=InstParamPack. Preserve its original stack prologue.\n'
+                   '0x037b5e8c = b InventoryItemCreateHook\n\n' + hook)
+
+
 def main() -> int:
     if len(sys.argv) != 2:
         print(f"Usage: {Path(sys.argv[0]).name} patch_SpawnActors.asm", file=sys.stderr)
@@ -15,6 +30,7 @@ def main() -> int:
     marker = "; MILKBAR_EQUIPMENT_FACTORY_RESOLVER"
     internal_marker = "; MILKBAR_INTERNAL_EQUIPMENT_FACTORY_RESOLVER_V3"
     if internal_marker in text:
+        path.write_text(add_item_factory_hook(text), encoding="utf-8")
         return 0
 
     if marker not in text:
@@ -89,7 +105,7 @@ def main() -> int:
     )
     if text.count(internal_anchor) != 1:
         raise RuntimeError("Expected one public actor-factory hook assignment")
-    path.write_text(text.replace(internal_anchor, internal_hook, 1), encoding="utf-8")
+    path.write_text(add_item_factory_hook(text.replace(internal_anchor, internal_hook, 1)), encoding="utf-8")
     return 0
 
 
