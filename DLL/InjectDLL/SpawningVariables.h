@@ -16,6 +16,7 @@
 #include "TestTelemetry.h"
 #include "ActorSpawnParams.h"
 #include "SharedItems.h"
+#include "RemoteAnimationQueue.h"
 
 // This stuff here was yoinked from BetterVR
 // -----------------------------------------
@@ -118,12 +119,6 @@ static_assert(sizeof(InstanceData) == 256, "Spawn instance ring entry must remai
 		std::string Name;
 	};
 
-	extern struct QueueAnimation {
-		int playerNumber;
-		uint32_t actorAddress;
-		uint32_t animation;
-	};
-
 	extern struct QueueActorDelete {
 		int playerNumber;
 		uint32_t actorAddress;
@@ -177,12 +172,6 @@ bool actor_spawn_template_ready = false;
 InstanceData actor_spawn_template{};
 int actor_spawn_template_r3 = 0;
 int actor_spawn_template_r5 = 0;
-
-struct CompletedAnimation
-{
-	uint32_t actorAddress;
-	uint32_t animation;
-};
 
 std::map<int, CompletedAnimation> completedAnimations;
 std::map<int, DWORD> lastAnimationPointerWarning;
@@ -689,23 +678,8 @@ void queueRemoteAnimation(int playerNumber, uint64_t actorAddress, uint32_t anim
 
 	const uint32_t guestActorAddress = static_cast<uint32_t>(actorAddress);
 	std::unique_lock<std::shared_mutex> queueLock(queue_mutex);
-	const auto completed = completedAnimations.find(playerNumber);
-	if (completed != completedAnimations.end() &&
-		completed->second.actorAddress == guestActorAddress &&
-		completed->second.animation == animation)
-		return;
-
-	for (QueueAnimation& queued : queuedAnimations)
-	{
-		if (queued.playerNumber == playerNumber)
-		{
-			queued.actorAddress = guestActorAddress;
-			queued.animation = animation;
-			return;
-		}
-	}
-
-	queuedAnimations.push_back({playerNumber, guestActorAddress, animation});
+	queueAnimationUpdate(queuedAnimations, completedAnimations,
+		{playerNumber, guestActorAddress, animation});
 }
 
 void queueRemoteEquipmentState(
@@ -1079,6 +1053,11 @@ bool setupAnimation(PPCInterpreter_t* hCPU, TransferableData& trnsData,
 	trnsData.interceptRegisters = false;
 	pending_spawn_sequence = ++spawn_request_sequence;
 	pending_spawn_name = animationName;
+	TestTelemetry::emit("animation_dispatch", queued.playerNumber, [&](auto& json) {
+		json.Key("actor"); json.Uint(queued.actorAddress);
+		json.Key("animation"); json.Uint(queued.animation);
+	}, true);
+	beginAnimationDispatch(completedAnimations, queued.playerNumber);
 	pending_dispatch_kind = PendingDispatchKind::Animation;
 	pending_animation_player = queued.playerNumber;
 	pending_animation_actor = queued.actorAddress;

@@ -354,7 +354,47 @@ void Player::PThread()
 			const float frameTime = 1000.0f / updateRate;
 			this->Teleport(Helper::Extrapolation::Next(this->Position->LastKnown, this->Speed, (frameTime - FunctionTime) / 1000.0f));
 			if (TestTelemetry::enabled())
+			{
 				TestTelemetry::applied(this->PlayerNumber, this->baseAddr, this->Position->LastKnown);
+				TestTelemetry::emit("npc_equipment", this->PlayerNumber, [&](auto& json) {
+					json.Key("actor"); json.Uint64(this->baseAddr);
+					uint32_t state = 0, vtable = 0, getter = 0;
+					if (Memory::TryReadBigEndian4BytesOffset(this->baseAddr + 0xb94, state))
+					{ json.Key("state"); json.Uint(state); }
+					if (Memory::TryReadBigEndian4BytesOffset(this->baseAddr + 0xe8, vtable) &&
+						vtable && Memory::TryReadBigEndian4BytesOffset(vtable + 0x314, getter))
+					{ json.Key("getter"); json.Uint(getter); }
+					// Verified v208 NPC getter: addi r3,r3,0x930; blr.
+					// Each 16-byte entry contains the actor-link data and attachment flags.
+					if (getter == 0x0202eaac)
+					{
+						json.Key("children"); json.StartArray();
+						for (uint32_t slot = 0; slot < 3; ++slot)
+						{
+							json.StartArray();
+							for (uint32_t field = 0; field < 16; field += 4)
+							{
+								uint32_t value = 0;
+								if (Memory::TryReadBigEndian4BytesOffset(
+									this->baseAddr + 0x930 + slot * 16 + field, value))
+									json.Uint(value);
+								else json.Null();
+							}
+							json.EndArray();
+						}
+						json.EndArray();
+					}
+					json.Key("transition_words"); json.StartArray();
+					for (uint32_t offset = 0xb98; offset <= 0xbb8; offset += 4)
+					{
+						uint32_t value = 0;
+						if (Memory::TryReadBigEndian4BytesOffset(this->baseAddr + offset, value))
+							json.Uint(value);
+						else json.Null();
+					}
+					json.EndArray();
+				});
+			}
 			this->Bomb->reset();
 			this->Bomb2->reset();
 			this->BombCube->reset();

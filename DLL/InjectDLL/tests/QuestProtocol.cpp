@@ -4,12 +4,32 @@
 #include "ActorSpawnParams.h"
 #include "SharedItems.h"
 #include "EnemyCombat.h"
+#include "RemoteAnimationQueue.h"
 #include <cassert>
 #include <iostream>
 namespace Logging {
 void LoggerService::LogInformation(std::string, const char*) {}
 }
 int main() {
+    std::vector<QueueAnimation> animations;
+    std::map<int, CompletedAnimation> completed{{1, {0x1000, 10}}};
+    queueAnimationUpdate(animations, completed, {1, 0x1000, 20});
+    queueAnimationUpdate(animations, completed, {1, 0x1000, 10});
+    assert(animations.size() == 1 && animations.front().animation == 10);
+    animations.clear();
+    beginAnimationDispatch(completed, 1); // AS 20 is in flight.
+    queueAnimationUpdate(animations, completed, {1, 0x1000, 10});
+    assert(animations.size() == 1 && animations.front().animation == 10);
+    completed[1] = {0x1000, 20}; // AS 20 returns; AS 10 must still run.
+    assert(animations.front().animation != completed.at(1).animation);
+    animations.clear();
+    completed[1] = {0x1000, 10};
+    queueAnimationUpdate(animations, completed, {1, 0x1000, 10});
+    assert(animations.empty());
+    queueAnimationUpdate(animations, completed, {1, 0x2000, 10});
+    queueAnimationUpdate(animations, completed, {2, 0x3000, 30});
+    assert(animations.size() == 2 && animations.front().actorAddress == 0x2000);
+
     DataTypes::EnemyCombat combat;
     assert(combat.observe(100) == 100 && combat.takeUpdate() == 100);
     combat.receive(80);

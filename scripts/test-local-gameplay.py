@@ -196,6 +196,39 @@ def actor_lifecycle_result(rows, start, end):
                 mismatched_applied_samples=mismatches, applied_samples=len(applied))
 
 
+def equipment_attachment_result(received, snapshots, start, end):
+    """Read both NPC attachment flags after a one-handed draw, not just packets."""
+    held = [r for r in received if start <= r['time_ms'] <= end
+            and r['equipment_state'] == 2 and r['equipment'][0] == 1
+            and r['equipment'][2] != 0]
+    if not held:
+        return dict(passed=False, reason='No received one-handed draw')
+    requested = held[0]['time_ms']
+    samples = [r for r in snapshots if requested <= r['time_ms'] <= end]
+    matches = []
+    for row in samples:
+        children = row.get('children', [])
+        if (row.get('state') == 0 and len(children) >= 2
+                and all(len(child) == 4 and all(isinstance(v, int) for v in child)
+                        and child[0] != 0 and child[1] != 0xffffffff
+                        and child[3] >> 24 == 0 for child in children[:2])):
+            matches.append(row)
+    # Require consecutive fresh samples for the same actor. One transient flag
+    # match followed by a delayed shield attachment cannot pass.
+    stable = next(((a, b) for a, b in zip(samples, samples[1:])
+                   if a in matches and b in matches and a['actor'] == b['actor']
+                   and 0 < b['time_ms'] - a['time_ms'] <= 300
+                   and b['time_ms'] - requested <= 600), None)
+    settled = [r for r in samples if stable and r['time_ms'] >= stable[0]['time_ms']]
+    persistent = bool(stable and settled and settled[-1]['time_ms'] >= end - 500
+                      and all(r in matches and r['actor'] == stable[0]['actor'] for r in settled)
+                      and all(b['time_ms'] - a['time_ms'] <= 300
+                              for a, b in zip(settled, settled[1:])))
+    return dict(passed=persistent,
+                attachment_ms=stable[1]['time_ms'] - requested if stable else None,
+                scope='Verified v208 NPC sword/shield attachment flags; rendered bone timing still needs visual verification.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--directory', type=Path, default=ROOT / 'Build/local-multiplayer')
@@ -550,6 +583,10 @@ def main():
             matched = {tuple(r['equipment']) for r in remote if r['equipment_state'] != 0}
             check(f'{label}_to_{other}_draw_weapon', passed=bool(held) and held.issubset(matched),
                   local_equipment=sorted(held), received_equipment=sorted(matched))
+            if args.one_handed_fixture:
+                check(f'{label}_to_{other}_sword_shield_attachment_flags',
+                      **equipment_attachment_result(remote,
+                          records(run/f'{other}.jsonl', 'npc_equipment'), start, time.time()*1000))
             action(label,.3,buttons=['b']); time.sleep(2)
             action(label,.6,rx=1,ry=.35)
             start = time.time()*1000

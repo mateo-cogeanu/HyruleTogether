@@ -4,6 +4,13 @@ All notable changes made while turning the original Windows-only Milk Bar Launch
 
 ## Unreleased — Hyrule Together cross-platform port
 
+### Animation queue restoration and attachment diagnostics
+
+- Fix two native AS queue races during rapid transitions: a return to the previously completed AS now replaces an obsolete waiting request, and submitting another AS invalidates that completed cache before new snapshots can consult it. An actor replacement still receives its first AS even when the animation hash matches the old actor. Production native queue regressions cover waiting, in-flight restoration, repeated snapshots, and independent players.
+- Add opt-in animation dispatch events and checked v208 NPC equipment-child/transition snapshots. Verify the NPC child getter against the owned v208 executable before reading its table; diagnostic snapshots do not write game state.
+- Extend the one-handed desktop fixture with separate sword/shield attachment flag checks. Require two consecutive matching snapshots within 600 ms of the received draw, both valid children on the same actor, and persistent fresh flags through the observation window. Reject late, missing, transient, stale, and different-actor readback. This measures internal attachment mode, not rendered bone timing or authentic animation appearance.
+- The existing baseline run `20261002-161315` and attachment diagnostic `20261002-161831` both pass their 20 prior checks. The native universal build and production protocol/state tests pass; fourteen harness tests pass. Run `20261002-162440` with the updated native client passes all 28 combined desktop checks. Applying the new attachment checker to its retained draw windows passes both directions (118 ms A→B, 159 ms B→A); the supplemental results are archived in `attachment-readback.json`, and future one-handed runs include these checks directly. Shared enemy AI/attacks, full quest behavior, broader item support, Linux gameplay validation, and Android remain unfinished; Android stays paused.
+
 ### README refresh and desktop build target names
 
 - Rewrite the project README around the current desktop launcher, setup, build commands, multiplayer progress, testing, and credits. Mark unfinished synchronization and paused Android development accurately, link the existing license notice, and finish with the Nintendo non-endorsement disclaimer.

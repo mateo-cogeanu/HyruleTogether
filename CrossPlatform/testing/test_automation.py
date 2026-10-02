@@ -23,6 +23,25 @@ def request(kind, body=b''):
 
 
 class AutomationTests(unittest.TestCase):
+    def test_equipment_attachment_needs_two_children_and_fresh_stable_readback(self):
+        received = [dict(time_ms=100, equipment_state=2, equipment=[1, 4, 41])]
+        child = [0x1000, 5, 0, 0]
+        snapshots = [dict(time_ms=t, actor=0x2000, state=0, children=[child, child])
+                     for t in (150, 250)]
+        self.assertTrue(gameplay.equipment_attachment_result(received, snapshots, 90, 300)['passed'])
+        self.assertFalse(gameplay.equipment_attachment_result([], snapshots, 90, 300)['passed'])
+        self.assertFalse(gameplay.equipment_attachment_result(received, snapshots[:1], 90, 300)['passed'])
+        reverted = snapshots + [dict(snapshots[-1], time_ms=280, state=1)]
+        self.assertFalse(gameplay.equipment_attachment_result(received, reverted, 90, 300)['passed'])
+        self.assertFalse(gameplay.equipment_attachment_result(received, snapshots, 90, 1500)['passed'])
+        for changes in (
+            dict(time_ms=800), dict(actor=0x3000), dict(state=1),
+            dict(children=[child]), dict(children=[child, [0x1000, 5, 0, 1 << 24]]),
+            dict(children=[child, [0, 5, 0, 0]]),
+        ):
+            invalid = [snapshots[0], dict(snapshots[1], **changes)]
+            self.assertFalse(gameplay.equipment_attachment_result(received, invalid, 90, 300)['passed'])
+
     def test_combined_damage_requires_two_hits_and_stable_fresh_readback(self):
         sources = [[dict(slot=-988114952, before=13, after=7, time_ms=100)],
                    [dict(slot=-988114952, before=13, after=10, time_ms=110)]]

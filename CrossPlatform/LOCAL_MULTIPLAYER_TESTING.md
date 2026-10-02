@@ -44,7 +44,13 @@ session replaces LatestLog and archives the previous session in that profile.
 ## Unattended gameplay regression run
 
 Use `--one-handed-fixture` with the current Great Plateau baseline to equip its
-one-handed club and shield in both clients. The fixture selects Equip explicitly;
+one-handed club and shield in both clients. The fixture also checks the NPC sword/shield attachment flags separately from
+received equipment packets: both valid child links must settle on the same actor
+within 600 ms, remain consistent, and provide fresh samples through the draw
+window. These are internal attachment-mode checks; they do not establish rendered
+bone timing or authentic animation appearance. Opt-in telemetry records
+`npc_equipment` snapshots and `animation_dispatch` events for diagnosis.
+The fixture selects Equip explicitly;
 the context menu can remember a prior Drop selection. With `--inventory-drops`,
 an additional assertion rejects equipped clubs in the shared-item stream.
 
@@ -56,6 +62,11 @@ state tests reject damage echoes; server tests combine simultaneous hits. Update
 servers advertise the delta capability during connection; older servers use the
 legacy client mode. Active combat baselines are retained for the server session;
 Blood Moon and respawn resets still require explicit generation synchronization.
+
+The animation queue restoration run `20261002-162440` passes all 28 combined
+checks. Both new attachment checks also pass against its retained draw windows
+(see that run’s `attachment-readback.json`). New one-handed runs include the
+attachment checks in `report.json` directly.
 
 The combined regression command is:
 
