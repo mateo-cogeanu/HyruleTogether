@@ -64,6 +64,22 @@ class AutomationTests(unittest.TestCase):
         self.assertFalse(gameplay.replicated_drop_names([source], [dict(peer, position=[0, 0, 0])], live=True))
         self.assertFalse(gameplay.replicated_drop_names([source], [dict(peer, position=[float('nan'), 20, 50])], live=True))
 
+    def test_item_motion_requires_sustained_game_actor_readback(self):
+        fixture = dict(id='wood', time_ms=100, before=[100,20,50])
+        source = [dict(id='wood', revision=2, position=[102,20,50], time_ms=3000, actor=1)]
+        peer = [dict(source[0], time_ms=t, actor=2) for t in range(1000,3001,100)]
+        applied = [dict(id='wood', revision=2, time_ms=500)]
+        def passed(rows=peer, writes=applied, local=source, now=3000):
+            return gameplay.item_motion_result([fixture], local, rows, writes, now)['passed']
+        self.assertTrue(passed())
+        self.assertFalse(passed(writes=[]))
+        self.assertFalse(passed(now=5000))
+        self.assertFalse(passed(local=[dict(source[0], position=fixture['before'])]))
+        self.assertFalse(passed(rows=[dict(r, revision=1) for r in peer]))
+        self.assertFalse(passed(rows=[dict(r, position=fixture['before']) for r in peer]))
+        self.assertFalse(passed(rows=peer[:-1]+[dict(peer[-1], actor=3)]))
+        self.assertFalse(passed(rows=[peer[-1]]))
+
     def test_shared_pickup_requires_completed_removal_of_the_same_item_on_the_peer(self):
         source = dict(id='drop-1', removed=True, time_ms=100)
         peer = dict(source, time_ms=110)

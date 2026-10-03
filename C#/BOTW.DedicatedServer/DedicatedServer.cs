@@ -1036,9 +1036,11 @@ namespace BOTW.DedicatedServer
         {
             foreach (string item in ServerData.QuestData.ServerQuests)
             {
-                if (string.IsNullOrEmpty(search) || (QuestData[item][1].Contains(search)))
+                string name = QuestData.TryGetValue(item, out var metadata) && metadata.Count > 1
+                    ? metadata[1] : item;
+                if (string.IsNullOrEmpty(search) || name.Contains(search))
                 {
-                    Logger.LogInformation($"{QuestData[item][1]}");
+                    Logger.LogInformation(name);
                 }
             }
         }

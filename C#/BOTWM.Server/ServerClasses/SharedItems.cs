@@ -32,6 +32,14 @@ public class SharedItems
                 // Removal may come from the peer which picked up this item.
                 if (!input.Removed && creators[input.Id] != sessions[player]) continue;
                 if (input.Removed) existing.Removed = true;
+                else if (input.Revision > existing.Revision) {
+                    // Only the original session may move its item. A pose update
+                    // cannot change the resource, durability, modifiers or scene.
+                    if (!Valid(input) || !SameMetadata(existing, input)) continue;
+                    existing.Params.Single(p => p.Key == "@M").Value =
+                        input.Params.Single(p => p.Key == "@M").Value;
+                    existing.Revision = input.Revision;
+                }
                 foreach (var q in queues) q[input.Id] = Clone(existing);
                 continue;
             }
@@ -57,6 +65,11 @@ public class SharedItems
             return result;
         }
     }
+    static bool SameMetadata(SharedItem a, SharedItem b) =>
+        a.Name == b.Name && a.Map == b.Map && a.Section == b.Section &&
+        a.Params.Count == b.Params.Count && a.Params.All(p =>
+            b.Params.Any(q => p.Key == q.Key && p.Type == q.Type &&
+                (p.Key == "@M" || p.Value.Equals(q.Value, StringComparison.OrdinalIgnoreCase))));
     static bool ValidId(string id) => id != null && Regex.IsMatch(id, "^[a-zA-Z0-9-]{1,64}$");
     public static bool Valid(SharedItem item) {
         if (item.Name == null || !Regex.IsMatch(item.Name, "^(Item_|Weapon_|Obj_FireWoodBundle$)[A-Za-z0-9_]*$") || item.Name.Length > 80 ||

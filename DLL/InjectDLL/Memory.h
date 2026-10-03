@@ -1,4 +1,5 @@
 #pragma once
+#include <set>
 
 #include <cstdint>
 #include <vector>
@@ -246,7 +247,7 @@ namespace Memory
             std::string Type;
             std::string Name;
             uint64_t Address;
-            BYTE Value;
+            uint32_t Value = 0;
             bool beingChanged = false;
             bool changed = false;
 
@@ -254,7 +255,12 @@ namespace Memory
             {
                 if (beingChanged) return;
 
-                BYTE newValue = Memory::read_bytes(this->Address, 1, __FUNCTION__)[0];
+                // Address identifies the final value byte in both indexed
+                // layouts. Discovery flags are big-endian 32-bit integers:
+                // values such as 256 must not look like an undiscovered zero.
+                uint32_t newValue = Type == "L"
+                    ? static_cast<uint32_t>(Memory::read_bigEndian4Bytes(Address - 3, __FUNCTION__))
+                    : Memory::read_bytes(Address, 1, __FUNCTION__)[0];
 
                 if (Type == "L" && Value == 0 && newValue > 0x00)
                     changed = true;
@@ -287,6 +293,9 @@ namespace Memory
         std::vector<std::string> intsToChange;
         std::vector<std::string> itemsToAdd;
         std::vector<std::string> serverQuests;
+        // Retrying a flag after event-flow readback must never grant another
+        // spirit orb, dungeon counter increment, paraglider or korok seed.
+        std::set<std::string> rewardsQueued;
         std::recursive_mutex QuestMutex;
         bool (*IsPaused)();
 

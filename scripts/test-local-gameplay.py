@@ -93,6 +93,28 @@ def replicated_drop_names(source, peer, live=False):
          other['time_ms'] >= row['time_ms']) for other in peer)}
 
 
+def item_motion_result(fixtures, source, peer, applied, now):
+    """Require actual actor movement and fresh sustained peer poses, not write telemetry."""
+    for fixture in fixtures:
+        identity = fixture['id']
+        recent_source = [r for r in source if r['id'] == identity and now-2000 <= r['time_ms'] <= now]
+        recent_peer = [r for r in peer if r['id'] == identity and now-2000 <= r['time_ms'] <= now]
+        if not recent_source or len(recent_peer) < 3: continue
+        target = recent_source[-1]
+        if (target.get('revision', 0) < 1 or distance(target['position'], fixture['before']) < 1 or
+            target['time_ms'] < now-500 or recent_peer[-1]['time_ms'] < now-500 or
+            recent_peer[-1]['time_ms']-recent_peer[0]['time_ms'] < 1000): continue
+        if len({r['actor'] for r in recent_peer}) != 1: continue
+        if any(r.get('revision', 0) != target['revision'] or
+               distance(r['position'], target['position']) > .5 for r in recent_peer): continue
+        if not any(r['id'] == identity and r['revision'] == target['revision'] and
+                   r['time_ms'] >= fixture['time_ms'] for r in applied): continue
+        return dict(passed=True, id=identity, revision=target['revision'],
+                    displacement=distance(target['position'], fixture['before']),
+                    scope='Synthetic displacement of an actual dropped body; persistent actor positions on both clients.')
+    return dict(passed=False, scope='Missing movement, application, or sustained fresh peer actor readback.')
+
+
 def pickup_cleanup_ids(local_erased, peer_erased):
     return {row['id'] for row in local_erased if row['removed'] and any(
         other['id'] == row['id'] and other['removed'] and
@@ -241,9 +263,12 @@ def main():
     parser.add_argument('--one-handed-fixture', action='store_true', help='Equip the baseline one-handed club and shield in both clients before testing.')
     parser.add_argument('--enemy-concurrent-fixture', action='store_true', help='Apply independent synthetic damage from both clients; requires --enemy-fixture.')
     parser.add_argument('--inventory-pickup-client', choices=['a', 'b'], default='a', help='Client that picks up the owner A drop.')
+    parser.add_argument('--material-drop-fixture', action='store_true', help='Drop the baseline first material stack and require an Item_ actor on the peer; requires --inventory-drops.')
+    parser.add_argument('--item-motion-fixture', action='store_true', help='Move a real dropped wood body in isolated client A and require persistent peer actor readback; requires --inventory-drops.')
     parser.add_argument('--inventory-pickups', action='store_true', help='Probe pickup of the scripted drops; requires --inventory-drops.')
     parser.add_argument('--inventory-drops', action='store_true', help='Script spear/wood drops and verify peer creation, spawn metadata, and persistent matching positions.')
     parser.add_argument('--inventory-step-hold', type=float, default=0, help='Optional 0–15 second inspection pause after each inventory button.')
+    parser.add_argument('--quest-fixture-source', choices=['a', 'b'], default='a', help='Client that originates the synthetic quest flag.')
     parser.add_argument('--quest-fixture', action='store_true', help='Opt-in synthetic quest flag replication check in isolated saves.')
     parser.add_argument('--spawn-delay-ms', type=int, default=0, help='Delay the first remote-player spawn for the timeout regression fixture (0 to 30000).')
     args = parser.parse_args()
@@ -251,6 +276,10 @@ def main():
         parser.error('--enemy-concurrent-fixture requires --enemy-fixture')
     if not math.isfinite(args.inventory_step_hold) or not 0 <= args.inventory_step_hold <= 15:
         parser.error('--inventory-step-hold must be between 0 and 15 seconds')
+    if args.material_drop_fixture and not args.inventory_drops:
+        parser.error('--material-drop-fixture requires --inventory-drops')
+    if args.item_motion_fixture and (not args.inventory_drops or args.inventory_pickups):
+        parser.error('--item-motion-fixture requires --inventory-drops without --inventory-pickups')
     if args.inventory_pickups and not args.inventory_drops:
         parser.error('--inventory-pickups requires --inventory-drops')
     if not 0 <= args.spawn_delay_ms <= 30000:
@@ -291,9 +320,9 @@ def main():
     run = root / 'runs' / time.strftime('%Y%m%d-%H%M%S')
     run.mkdir(parents=True)
     result = dict(passed=False, checks=[], controller_type='Wii U GamePad', spawn_delay_ms=args.spawn_delay_ms,
-                  quest_fixture=args.quest_fixture, enemy_fixture=args.enemy_fixture,
+                  quest_fixture=args.quest_fixture, quest_fixture_source=args.quest_fixture_source, enemy_fixture=args.enemy_fixture,
                   enemy_concurrent_fixture=args.enemy_concurrent_fixture, scenario_window=args.scenario_window,
-                  inventory_drops=args.inventory_drops,
+                  inventory_drops=args.inventory_drops, item_motion_fixture=args.item_motion_fixture, material_drop_fixture=args.material_drop_fixture,
                   scope='Controller-driven game and native synchronization telemetry; synthetic fixtures test transport/application. Visual appearance, dialogue, rewards, and shared enemy AI require separate review.')
     result['revision'] = subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()
     result['native_client_sha256'] = hashlib.sha256(Path(config['client_library']).read_bytes()).hexdigest()
@@ -350,12 +379,14 @@ def main():
             shutil.copy2(profile, run/f'{label}-controller.xml')
             fixture_env = {}
             if args.inventory_drops: fixture_env['HYRULE_TEST_ITEM_PROBE'] = '1'
+            if args.item_motion_fixture and label == 'a': fixture_env['HYRULE_TEST_ITEM_MOTION'] = '1'
             if args.enemy_fixture and (label == 'a' or args.enemy_concurrent_fixture):
                 fixture_env['HYRULE_TEST_ENEMY_SOURCE'] = '1'
                 if label == 'b': fixture_env['HYRULE_TEST_ENEMY_DAMAGE'] = '3'
             if args.quest_fixture:
                 fixture_env['HYRULE_TEST_QUEST_NAME'] = 'HatenoMini_CameraBoy_Activated'
-                if label == 'a': fixture_env['HYRULE_TEST_QUEST_SOURCE'] = '1'
+                fixture_env['HYRULE_TEST_QUEST_PREREQUISITE'] = 'AncientLabo_AncientAssistant001_SSLv2Get'
+                if label == args.quest_fixture_source: fixture_env['HYRULE_TEST_QUEST_SOURCE'] = '1'
             spawn(label, [sys.executable, '-u', str(ROOT / 'CrossPlatform/milkbar_launcher.py'), 'launch'],
                   dict(os.environ, MILKBAR_DATA_DIR=str(client), HYRULE_TEST_TELEMETRY=str(run / f'{label}.jsonl'),
                        HYRULE_TEST_SPAWN_DELAY_MS=str(args.spawn_delay_ms), **fixture_env))
@@ -398,6 +429,12 @@ def main():
         # Checking A then waiting for B can leave A's earlier readiness stale.
         wait_until(playable, 60, 'both clients simultaneously ready', alive)
         check('both_games_playable', passed=True)
+        if args.inventory_drops:
+            unsolicited = [row for label in ('a', 'b')
+                for row in records(run/f'{label}.jsonl', 'item_published')
+                if row['name'].startswith('Weapon_')]
+            check('load_equipment_excluded_from_shared_drops', passed=not unsolicited,
+                  unexpected_publications=unsolicited)
         if args.one_handed_fixture:
             for label in ('a', 'b'):
                 def fixture_key(button):
@@ -492,6 +529,34 @@ def main():
             check('peer_inventory_drop_persistence', passed={
                 'Weapon_Spear_030', 'Obj_FireWoodBundle'}.issubset(nearby), names=sorted(nearby),
                 scope='Both live actors persist with matching positions, five seconds after spawning.')
+            if args.material_drop_fixture:
+                material_start = time.time()*1000
+                open_inventory()
+                # D-pad left can cross inventory categories, rather than clamp
+                # the grid. Normalize to Weapons and advance four tabs to Materials.
+                for _ in range(7):
+                    action('a', .18, rx=-1); action('a', .4)
+                for _ in range(4):
+                    action('a', .18, rx=1); action('a', .6)
+                for _ in range(5): action('a', .1, buttons=['up'])
+                for button in ('x', 'a', 'b', 'a'): inventory_button(button)
+                time.sleep(7); alive()
+                published = records(run/'a.jsonl', 'item_published', material_start)
+                expected = {row['name'] for row in published if row['name'].startswith('Item_')}
+                spawned = replicated_drop_names(published, records(run/'b.jsonl', 'item_spawned', material_start))
+                live_names = replicated_drop_names(records(run/'a.jsonl', 'item_live', time.time()*1000-2000),
+                    records(run/'b.jsonl', 'item_live', time.time()*1000-2000), live=True)
+                check('inventory_material_peer_actor', passed=bool(expected) and expected.issubset(spawned & live_names),
+                    names=sorted(expected), scope='Controller-dropped baseline material with matching peer actor identity and persistent live position.')
+            if args.item_motion_fixture:
+                def motion_readback():
+                    return item_motion_result(records(run/'a.jsonl', 'item_motion_fixture'),
+                        records(run/'a.jsonl', 'item_live'), records(run/'b.jsonl', 'item_live'),
+                        records(run/'b.jsonl', 'item_pose_applied'), time.time()*1000)
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline and not motion_readback()['passed']:
+                    time.sleep(.5); alive()
+                check('shared_item_motion_readback', **motion_readback())
             if args.one_handed_fixture:
                 published = [row for label in ('a', 'b') for row in records(run/f'{label}.jsonl', 'item_published')
                              if row['name'] == 'Weapon_Sword_004']
@@ -536,13 +601,21 @@ def main():
                         processed += 1
                 time.sleep(.1)
         if args.quest_fixture:
+            quest_source = run/f'{args.quest_fixture_source}.jsonl'
+            quest_peer = run/('b.jsonl' if args.quest_fixture_source == 'a' else 'a.jsonl')
             def quest_replicated():
-                return fixture_readback(records(run/'a.jsonl', 'quest_fixture_source'),
-                                        records(run/'b.jsonl', 'quest_fixture_readback'), 'quest')
+                return fixture_readback(records(quest_source, 'quest_fixture_source'),
+                                        records(quest_peer, 'quest_fixture_readback'), 'quest')
             wait_until(quest_replicated, 45, 'synthetic quest flag readback on peer', alive)
             check('synthetic_quest_replication', passed=True,
-                  source=records(run/'a.jsonl', 'quest_fixture_source')[-1],
+                  source=records(quest_source, 'quest_fixture_source')[-1],
                   peer=quest_replicated())
+            def prerequisite_replicated():
+                return fixture_readback(records(quest_source, 'quest_prerequisite_source'),
+                    records(quest_peer, 'quest_prerequisite_readback'), 'quest')
+            wait_until(prerequisite_replicated, 45, 'quest prerequisite readback on peer', alive)
+            check('synthetic_quest_prerequisite_replication', passed=True,
+                  peer=prerequisite_replicated(), scope='Quest dependency flag readback; journal appearance remains a separate UI check.')
         if args.enemy_fixture:
             def enemy_replicated():
                 if args.enemy_concurrent_fixture:

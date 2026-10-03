@@ -15,6 +15,9 @@ struct Item {
     std::string id, name, map, section;
     int owner = -1;
     bool removed = false;
+    uint32_t revision = 0, appliedRevision = 0;
+    DWORD lastPosePublished = 0, lastPoseApplied = 0, liveSince = 0;
+    bool motionFixtureApplied = false;
     std::vector<ActorSpawnParams::Entry> params;
     uint32_t actor = 0;
     DWORD captured = 0;
@@ -25,28 +28,44 @@ struct Item {
     int deleteReason = -1;
     DataTypes::Vec3f position;
 };
+inline bool revisionsEnabled = false;
+inline std::atomic<bool> worldInitialized{false};
 inline std::mutex mutex;
 inline std::map<std::string, Item> items;
 inline std::deque<Item> captures;
 inline std::map<std::string, DWORD> equipmentRequests;
 inline std::deque<std::string> spawnQueue, deleteQueue;
-inline std::string expecting, localMap, localSection;
+inline std::string expecting, localMap, localSection, lastSentId;
 inline DWORD expectedSince = 0, lastPaused = 0;
 inline DataTypes::Vec3f localPosition;
 inline uint32_t creator = 0, heap = 0;
 inline unsigned sequence = 0;
 inline void reset() {
     std::lock_guard<std::mutex> lock(mutex);
+    worldInitialized.store(false, std::memory_order_release);
     items.clear();
     captures.clear();
     equipmentRequests.clear();
     spawnQueue.clear();
     deleteQueue.clear();
     expecting.clear();
+    lastSentId.clear();
     localMap.clear();
     localSection.clear();
     creator = heap = 0;
     expectedSince = lastPaused = 0;
+}
+// Caller holds mutex. A pickup can arrive while the game factory is still
+// creating its replica; the late callback must schedule that actor's deletion.
+inline void bindActor(Item &item, uint32_t actor) {
+    item.actor = actor;
+    item.captured = GetTickCount();
+    item.attempts = 0;
+    item.live = false;
+    item.liveSince = item.lastPoseApplied = 0;
+    item.appliedRevision = 0;
+    item.deleting = item.removed;
+    if (item.removed) deleteQueue.push_back(item.id);
 }
 inline const std::map<std::string, uint8_t> allowed = {
     {"IsPlayerPut", 3}, {"AddParam", 0}, {"AddSpecialFlag", 0}, {"IsWeaponCreateByRawLife", 3},
@@ -141,6 +160,8 @@ inline void writeJson(rapidjson::Writer<rapidjson::StringBuffer> &w, const Item 
     w.String(item.id.c_str());
     w.Key("Owner");
     w.Int(item.owner);
+    w.Key("Revision");
+    w.Uint(item.revision);
     w.Key("Removed");
     w.Bool(item.removed);
     w.Key("Name");
@@ -169,10 +190,16 @@ inline std::string outgoing() {
     rapidjson::StringBuffer b;
     rapidjson::Writer<rapidjson::StringBuffer> w(b);
     w.StartArray();
-    for (auto &pair : items) {
-        auto &item = pair.second;
+    // A continuously moving early identity must not block later drops or
+    // pickup tombstones. Retry all pending identities in round-robin order.
+    auto next = items.upper_bound(lastSentId);
+    for (size_t count = 0; count < items.size(); ++count) {
+        if (next == items.end()) next = items.begin();
+        auto &item = next->second;
+        ++next;
         if (!item.sent && (!item.remote || item.removed)) {
             writeJson(w, item);
+            lastSentId = item.id;
             break;
         }
     }
@@ -190,27 +217,27 @@ inline void incoming(const std::string &json, int self) {
             !v["Owner"].IsInt() || !v.HasMember("Removed") || !v["Removed"].IsBool())
             continue;
         std::string id = v["Id"].GetString();
+        const uint32_t revision = v.HasMember("Revision") && v["Revision"].IsUint()
+            ? v["Revision"].GetUint() : 0;
         auto existing = items.find(id);
-        if (existing != items.end()) {
-            TestTelemetry::emit(
-                "item_acknowledged", -1,
-                [&](auto &w) {
-                    w.Key("id");
-                    w.String(id.c_str());
-                    w.Key("removed");
-                    w.Bool(v["Removed"].GetBool());
-                },
-                true);
+        if (existing != items.end() && (v["Removed"].GetBool() ||
+            existing->second.removed || !existing->second.remote)) {
+            auto &item = existing->second;
             if (v["Removed"].GetBool()) {
-                existing->second.removed = true;
-                if (existing->second.actor && !existing->second.deleting) {
+                item.removed = true;
+                if (item.actor && !item.deleting) {
                     deleteQueue.push_back(id);
-                    existing->second.deleting = true;
+                    item.deleting = true;
                 }
             }
-            // A creation acknowledgement may arrive after a local pickup.
-            // It must not acknowledge the newer removal still awaiting delivery.
-            existing->second.sent = !existing->second.removed || v["Removed"].GetBool();
+            // Late creation/pose acknowledgements must not retire a newer
+            // update, and no pose can acknowledge a pending pickup tombstone.
+            item.sent = item.removed ? v["Removed"].GetBool() : revision >= item.revision;
+            TestTelemetry::emit("item_acknowledged", -1, [&](auto &w) {
+                w.Key("id"); w.String(id.c_str());
+                w.Key("removed"); w.Bool(v["Removed"].GetBool());
+                w.Key("revision"); w.Uint(revision);
+            }, true);
             continue;
         }
         if (v["Removed"].GetBool()) {
@@ -228,6 +255,7 @@ inline void incoming(const std::string &json, int self) {
         Item item;
         item.id = id;
         item.owner = v["Owner"].GetInt();
+        item.revision = revision;
         item.name = v["Name"].GetString();
         item.map = v["Map"].GetString();
         item.section = v["Section"].GetString();
@@ -250,8 +278,16 @@ inline void incoming(const std::string &json, int self) {
             }
             item.params.push_back(entry);
         }
-        if (!valid || !validate(item) || items.size() >= 4096)
+        if (!valid || !validate(item) || (existing == items.end() && items.size() >= 4096))
             continue;
+        if (existing != items.end()) {
+            auto &current = existing->second;
+            if (revision <= current.revision || item.name != current.name ||
+                item.map != current.map || item.section != current.section) continue;
+            current.params = item.params;
+            current.revision = revision;
+            continue;
+        }
         items.emplace(id, item);
         if (item.remote)
             spawnQueue.push_back(id);

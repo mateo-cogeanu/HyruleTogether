@@ -173,6 +173,8 @@ bool Main::connectToServer(std::string serverMessage)
     {
         DataTypes::EnemyDamageDeltas = serverDoc.HasMember("EnemyDamageDeltas") &&
             serverDoc["EnemyDamageDeltas"].IsBool() && serverDoc["EnemyDamageDeltas"].GetBool();
+        SharedItems::revisionsEnabled = serverDoc.HasMember("SharedItemRevisions") &&
+            serverDoc["SharedItemRevisions"].IsBool() && serverDoc["SharedItemRevisions"].GetBool();
         //int pN = serverData[2] - '0';
         int pN = serverDoc["PlayerNumber"].GetInt();
 

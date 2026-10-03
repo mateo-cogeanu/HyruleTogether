@@ -9,5 +9,6 @@
         public bool QuestSync;
         public string EnemySyncList;
         public bool EnemyDamageDeltas = true;
+        public bool SharedItemRevisions = true;
     }
 }

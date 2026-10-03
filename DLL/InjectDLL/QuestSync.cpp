@@ -6,6 +6,7 @@
 #include <sstream>
 #include <map>
 #include "TestTelemetry.h"
+#include "QuestPrerequisites.h"
 #include "dllmain_Functions.h"
 
 using namespace Memory;
@@ -67,6 +68,15 @@ void Quests_class::scanQuestMemory(std::vector<std::string> QuestsToSync)
             requested.emplace(hash, id);
         }
     }
+    if (std::find(QuestsToSync.begin(), QuestsToSync.end(), "V") != QuestsToSync.end()) {
+        for (const auto &flag : QuestPrerequisites::flags) {
+            if (requested.count(flag.hash)) continue;
+            Quest quest{};
+            quest.Type = "V"; quest.Name = flag.name;
+            QuestList.emplace(flag.id, quest);
+            requested.emplace(flag.hash, flag.id);
+        }
+    }
     // Index all readable guest allocations in one pass. Flags are split into
     // several arrays (including category-encoded koroks); the first array alone
     // omits most quest stages. Never walk past a mapped region or guest memory.
@@ -100,7 +110,12 @@ void Quests_class::scanQuestMemory(std::vector<std::string> QuestsToSync)
                                 json.Key("id"); json.String(found->second.c_str());
                                 json.Key("name"); json.String(quest.Name.c_str());
                                 json.Key("address"); json.Uint64(quest.Address);
-                                json.Key("value"); json.Uint(next[offset - 1]);
+                                uint32_t value = next[offset - 1];
+                                if (integer) {
+                                    value = 0;
+                                    for (size_t i = 20; i < 24; ++i) value = (value << 8) | next[i];
+                                }
+                                json.Key("value"); json.Uint(value);
                             }, true);
                         }
                     }
@@ -411,7 +426,6 @@ bool Quests_class::updateQuests(bool eventStatus)
 					QuestList[incoming].beingChanged = true;
 					serverQuests.push_back(incoming);
 
-					if (QuestList[incoming].Type == "K") koroksToAdd++;
 				}
 			}
 		}
@@ -550,17 +564,30 @@ void Quests_class::changeFlag()
 
 			for (auto const& pair : QuestList)
 			{
-                quest = pair.second;
-                if (boolsToChange[0] == quest.Name) { ID = pair.first; break; }
+                if (boolsToChange[0] == pair.second.Name) {
+                    ID = pair.first; quest = pair.second; break;
+                }
 			}
 
-			if (boolsToChange[0].find("Clear_Dungeon") != std::string::npos)
+            // The local game may finish the same stage while its incoming
+            // update waits for the event channel. Check the real flag before
+            // issuing an action or granting its associated reward.
+            if (!ID.empty() && (Memory::read_bytes(quest.Address, 1, __FUNCTION__)[0] & 1)) {
+                QuestList[ID].beingChanged = false;
+                boolsToChange.erase(boolsToChange.begin());
+                guard.unlock(); Sleep(10); continue;
+            }
+            if (!ID.empty() && quest.Type == "K" && rewardsQueued.insert(boolsToChange[0]).second)
+                ++koroksToAdd;
+			if (boolsToChange[0].find("Clear_Dungeon") != std::string::npos &&
+                rewardsQueued.insert(boolsToChange[0]).second)
 			{
 				itemsToAdd.push_back("Obj_DungeonClearSeal");
 				intsToChange.push_back("DungeonClearCounter");
 			}
 
-			if (boolsToChange[0].find("FindDungeon_Finish") != std::string::npos)
+			if (boolsToChange[0].find("FindDungeon_Finish") != std::string::npos &&
+                rewardsQueued.insert(boolsToChange[0]).second)
 			{
 				boolsToChange.push_back("Find_Impa_Activated");
 				boolsToChange.push_back("GanonQuest_Activated");
@@ -699,8 +726,6 @@ void Quests_class::resyncQuests()
 					boolsToChange.push_back(QuestList[serverQuests[i]].Name);
 					QuestList[serverQuests[i]].Value = valueToWrite;
 					QuestList[serverQuests[i]].beingChanged = true;
-
-					if (QuestList[serverQuests[i]].Type == "K") koroksToAdd++;
 
 				}
 

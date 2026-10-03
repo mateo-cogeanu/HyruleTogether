@@ -17,8 +17,9 @@ parts of world synchronization are still unfinished.
 - Automatic multiplayer mod merging against your own game, update, and DLC
   files using the bundled UKMM merger.
 - Player movement, equipment transitions, and projectile synchronization.
-- Shared inventory drops and pickup cleanup for the tested weapon/material
-  paths, combined enemy damage, and quest flag synchronization.
+- Shared inventory drops, owner-driven position updates, and pickup cleanup for
+  the tested weapon/material paths, combined enemy damage, and quest flags with
+  additional progression prerequisites.
 
 Authentic shield animation timing, shared enemy AI and attacks, complete quest
 journal/dialogue/reward behavior, and broader dropped-item coverage still need

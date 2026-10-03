@@ -10,7 +10,35 @@
 namespace Logging {
 void LoggerService::LogInformation(std::string, const char*) {}
 }
+namespace {
+std::vector<BYTE> questMemory(4);
+}
+namespace Memory {
+std::vector<BYTE> read_bytes(uint64_t address, int size, const char*) {
+    return {questMemory.begin() + address, questMemory.begin() + address + size};
+}
+int read_bigEndian4Bytes(uint64_t address, const char*) {
+    uint32_t value = 0;
+    for (unsigned i = 0; i < 4; ++i) value = (value << 8) | questMemory.at(address+i);
+    return static_cast<int>(value);
+}
+}
 int main() {
+    Memory::Quests_class questService;
+    auto &discovery = questService.QuestList["L0"];
+    discovery.Type = "L"; discovery.Address = 3;
+    questMemory = {0,0,1,0}; // Visited value 256, whose last byte is zero.
+    discovery.updateValue();
+    assert(discovery.Value == 256 && discovery.changed);
+    discovery.changed = false; discovery.updateValue();
+    assert(!discovery.changed);
+    auto &categoryFlag = questService.QuestList["K0"];
+    categoryFlag.Type = "K"; categoryFlag.Address = 3;
+    questMemory[3] = 0x16; categoryFlag.updateValue();
+    assert(!categoryFlag.changed);
+    questMemory[3] = 0x17; categoryFlag.updateValue();
+    assert(categoryFlag.changed);
+
     std::vector<QueueAnimation> animations;
     std::map<int, CompletedAnimation> completed{{1, {0x1000, 10}}};
     queueAnimationUpdate(animations, completed, {1, 0x1000, 20});
@@ -119,11 +147,49 @@ int main() {
     SharedItems::incoming("[{\"Id\":\"test-1\",\"Owner\":0,\"Removed\":true}]", 0);
     assert(pickedUp.sent && SharedItems::outgoing() == "[]");
     SharedItems::reset();
+    // A newer pose updates the existing replica, not its actor identity.
+    auto encodeItem = [](const SharedItems::Item &value) {
+        rapidjson::StringBuffer b; rapidjson::Writer<rapidjson::StringBuffer> w(b);
+        w.StartArray(); SharedItems::writeJson(w, value); w.EndArray();
+        return std::string(b.GetString());
+    };
+    SharedItems::incoming(encodeItem(item), 1);
+    SharedItems::items.at(item.id).actor = 123;
+    auto moved = item; moved.revision = 2; moved.params[2].value[13] = 0x7b;
+    SharedItems::incoming(encodeItem(moved), 1);
+    assert(SharedItems::items.at(item.id).revision == 2);
+    assert(SharedItems::items.at(item.id).actor == 123 && SharedItems::spawnQueue.size() == 1);
+    SharedItems::incoming(encodeItem(item), 1);
+    assert(SharedItems::items.at(item.id).params[2].value == moved.params[2].value);
+    SharedItems::reset();
+    moved.remote = false; moved.sent = false;
+    SharedItems::items.emplace(moved.id, moved);
+    SharedItems::incoming(encodeItem(item), 0);
+    assert(!SharedItems::items.at(item.id).sent);
+    SharedItems::incoming(encodeItem(moved), 0);
+    assert(SharedItems::items.at(item.id).sent);
+    SharedItems::items.at(item.id).removed = true;
+    SharedItems::items.at(item.id).sent = false;
+    SharedItems::incoming(encodeItem(moved), 0);
+    assert(!SharedItems::items.at(item.id).sent);
+    SharedItems::reset();
+    auto lateReplica = item; lateReplica.removed = true;
+    SharedItems::bindActor(lateReplica, 456);
+    assert(lateReplica.actor == 456 && lateReplica.deleting);
+    assert(SharedItems::deleteQueue.size() == 1 && SharedItems::deleteQueue.front() == item.id);
+    SharedItems::reset();
+    auto another = item; another.id = "test-2";
+    SharedItems::items.emplace(item.id, item);
+    SharedItems::items.emplace(another.id, another);
+    assert(SharedItems::outgoing() == encodeItem(item));
+    assert(SharedItems::outgoing() == encodeItem(another));
+    assert(SharedItems::outgoing() == encodeItem(item)); // Both still need an ACK.
+    SharedItems::reset();
     DTO::WorldDTO world{};
     DTO::ClientCharacterDTO player{};
     DTO::EnemyDTO enemies{};
     DTO::QuestDTO quests{};
-    quests.Completed = {"V0", "V1365", std::string(64, 'x')};
+    quests.Completed = {"V0", "V1365", "P1", std::string(64, 'x')};
     DTO::ClientDTO request{&world, &player, &enemies, &quests};
     byte frame[7168]{};
     Serialization::Serializer::SerializeClientData(frame, &request);

@@ -61,4 +61,28 @@ public class SharedItemsShould
         Assert.True(Assert.Single(service.GetQueue(1)).Removed);
     }
 
+    [Fact] public void ReplicateNewerPosesWithoutChangingMetadataOrResurrectingPickups() {
+        var service = new SharedItems(2); service.Connect(0); service.Connect(1);
+        service.Update(0, new[] { Drop() }); service.GetQueue(0); service.GetQueue(1);
+        var moved = Drop(); moved.Revision = 2;
+        moved.Params[2].Value = "3f800000" + new string('0', 88);
+        service.Update(0, new[] { moved });
+        Assert.Equal(2u, Assert.Single(service.GetQueue(1)).Revision);
+        service.Update(0, new[] { Drop() });
+        var ack = Assert.Single(service.GetQueue(0));
+        Assert.Equal(2u, ack.Revision);
+        Assert.Equal(moved.Params[2].Value, ack.Params[2].Value);
+        service.GetQueue(1);
+        moved.Revision = 3; moved.Params[1].Value = "00000001";
+        service.Update(0, new[] { moved }); Assert.Empty(service.GetQueue(1));
+        moved = Drop(); moved.Revision = 3;
+        service.Update(1, new[] { moved }); Assert.Empty(service.GetQueue(0));
+        service.Update(1, new[] { new SharedItem { Id = moved.Id, Removed = true } });
+        service.GetQueue(1);
+        service.Update(0, new[] { moved });
+        Assert.True(Assert.Single(service.GetQueue(0)).Removed);
+        service.Connect(1);
+        Assert.True(Assert.Single(service.GetQueue(1)).Removed);
+    }
+
 }

@@ -26,7 +26,7 @@ bool ReadItemPack(uint32_t address, std::vector<ActorSpawnParams::Entry> &entrie
 }
 
 void CaptureSharedItem(const std::string &name, PPCInterpreter_t *hCPU) {
-    if (!started ||
+    if (!started || !SharedItems::worldInitialized.load(std::memory_order_acquire) ||
         (name.rfind("Item_", 0) && name.rfind("Weapon_", 0) && name != "Obj_FireWoodBundle"))
         return;
     std::vector<ActorSpawnParams::Entry> params;
@@ -87,7 +87,7 @@ void SharedItemCreated(const std::string &name, uint32_t actor) {
     if (!SharedItems::expecting.empty()) {
         auto it = SharedItems::items.find(SharedItems::expecting);
         if (it != SharedItems::items.end() && it->second.name == name) {
-            it->second.actor = actor;
+            SharedItems::bindActor(it->second, actor);
             TestTelemetry::emit(
                 "item_spawned", -1,
                 [&](auto &w) {
@@ -134,6 +134,9 @@ void SharedItemErased(uint32_t actor) {
                 }
             }
             pair.second.actor = 0;
+            pair.second.live = false;
+            pair.second.liveSince = 0;
+            if (!pair.second.removed) SharedItems::spawnQueue.push_back(pair.first);
             TestTelemetry::emit(
                 "item_erased", -1,
                 [&](auto &w) {
@@ -147,7 +150,18 @@ void SharedItemErased(uint32_t actor) {
 }
 
 void PublishSharedItems(DTO::ClientDTO *data) {
-    if (Game::GameInstance->IsPaused()) {
+    // Loading a save creates equipment through the same raw-life factory.
+    // Arm capture only after a playable world was observed; retain that state
+    // through inventory pauses, where actual drops are requested.
+    const bool ready = Game::GameInstance->WorldReady.load(std::memory_order_acquire);
+    auto position = data->PlayerData->Position;
+    if (ready) SharedItems::worldInitialized.store(true, std::memory_order_release);
+    else if (!std::isfinite(position.x()) || !std::isfinite(position.y()) ||
+        !std::isfinite(position.z()) ||
+        std::abs(position.x()) + std::abs(position.y()) + std::abs(position.z()) < 10)
+        SharedItems::worldInitialized.store(false, std::memory_order_release);
+    if (SharedItems::worldInitialized.load(std::memory_order_acquire) &&
+        Game::GameInstance->IsPaused()) {
         std::lock_guard<std::mutex> lock(SharedItems::mutex);
         SharedItems::lastPaused = GetTickCount();
     }
@@ -248,9 +262,46 @@ void PublishSharedItems(DTO::ClientDTO *data) {
                     if (!std::isfinite(pos[j]))
                         valid = false;
                 }
+                const double radiusSquared = double(pos[0])*pos[0] + double(pos[1])*pos[1] + double(pos[2])*pos[2];
+                if (radiusSquared < 100 || radiusSquared > 1e12) valid = false;
                 if (valid) {
+                    if (!pair.second.liveSince) pair.second.liveSince = GetTickCount();
                     pair.second.live = true;
                     pair.second.position = Vec3f(pos);
+                    auto &item = pair.second;
+                    // Keep one update in flight per item; otherwise continuous
+                    // motion could make every acknowledgement obsolete.
+                    if (SharedItems::revisionsEnabled && !item.remote && item.sent &&
+                        GetTickCount() - item.lastPosePublished >= 100 &&
+                        item.revision < UINT32_MAX) {
+                        auto matrix = std::find_if(item.params.begin(), item.params.end(),
+                            [](auto &p) { return p.key == "@M"; });
+                        if (matrix != item.params.end()) {
+                            float distance = 0;
+                            for (unsigned j = 0; j < 3; ++j) {
+                                uint32_t bits = 0;
+                                for (unsigned k = 0; k < 4; ++k)
+                                    bits = (bits << 8) | matrix->value[12 + 16*j + k];
+                                float previous; memcpy(&previous, &bits, 4);
+                                distance += (previous-pos[j])*(previous-pos[j]);
+                            }
+                            if (distance >= .0025f) {
+                                for (unsigned j = 0; j < 3; ++j) {
+                                    uint32_t bits; memcpy(&bits, &pos[j], 4);
+                                    for (unsigned k = 0; k < 4; ++k)
+                                        matrix->value[12 + 16*j + k] = (bits >> (24-8*k)) & 255;
+                                }
+                                ++item.revision;
+                                item.sent = false;
+                                item.lastPosePublished = GetTickCount();
+                                TestTelemetry::emit("item_pose_published", -1, [&](auto &w) {
+                                    w.Key("id"); w.String(item.id.c_str());
+                                    w.Key("revision"); w.Uint(item.revision);
+                                    TestTelemetry::position(w, item.position);
+                                }, true);
+                            }
+                        }
+                    }
                 }
                 if (valid)
                     TestTelemetry::emit("item_live", int(actor), [&](auto &w) {
@@ -260,6 +311,7 @@ void PublishSharedItems(DTO::ClientDTO *data) {
                         w.String(pair.second.name.c_str());
                         w.Key("actor");
                         w.Uint(actor);
+                        w.Key("revision"); w.Uint(pair.second.revision);
                         TestTelemetry::position(w, Vec3f(pos));
                     });
             }
@@ -267,10 +319,96 @@ void PublishSharedItems(DTO::ClientDTO *data) {
     data->SharedItems = SharedItems::outgoing();
 }
 
+// Apply received position corrections at the actor-update hook, never from
+// the socket thread. This is the single-body path already used for arrows.
+// Shift both swept centers with the transform so the next Havok integration
+// does not restore the old location. Preserve their time components.
+bool MoveSharedItemBody(SharedItems::Item &item, const float desired[3], uint64_t &body) {
+    if (Memory::read_string(Main::baseAddr + item.actor + 0x10,
+        item.name.size()+1, __FUNCTION__) != item.name) return false;
+    if (!Memory::TryReadPointers(item.actor, {0x3A0, 0x2C, 0, 0x14, 0, 0x5C}, body)) return false;
+    float current[3][3] = {};
+    for (unsigned axis = 0; axis < 3; ++axis) {
+        if (!std::isfinite(desired[axis]) || std::abs(desired[axis]) > 1000000) return false;
+        for (unsigned vector = 0; vector < 3; ++vector) {
+            uint32_t bits = 0;
+            if (!Memory::TryReadBigEndian4BytesOffset(body + 0x120 + vector*16 + axis*4, bits))
+                return false;
+            memcpy(&current[vector][axis], &bits, 4);
+            if (!std::isfinite(current[vector][axis]) ||
+                std::abs(current[vector][axis]) > 1000000) return false;
+        }
+    }
+    // Reject an uninitialized body or an incompatible motion layout.
+    for (unsigned vector = 1; vector < 3; ++vector)
+        for (unsigned axis = 0; axis < 3; ++axis)
+            if (std::abs(current[vector][axis] - current[0][axis]) > 100) return false;
+    for (unsigned axis = 0; axis < 3; ++axis) {
+        const float delta = desired[axis] - current[0][axis];
+        for (unsigned vector = 0; vector < 3; ++vector)
+            Memory::write_bigEndianFloat(Main::baseAddr + body + 0x120 + vector*16 + axis*4,
+                current[vector][axis] + delta, __FUNCTION__);
+    }
+    return true;
+}
+
+void ApplySharedItemPositions() {
+    if (!SharedItems::revisionsEnabled) return;
+    for (auto &pair : SharedItems::items) {
+        auto &item = pair.second;
+        if (item.removed || !item.actor || item.map != SharedItems::localMap ||
+            (item.map != "MainField" && item.section != SharedItems::localSection)) continue;
+        // Only the isolated harness opts into moving an actual dropped wood
+        // body. Subsequent publication and peer readback use production paths.
+        if (!item.remote && item.name == "Obj_FireWoodBundle" && item.liveSince &&
+            !item.motionFixtureApplied && GetTickCount() - item.liveSince >= 2000 &&
+            TestTelemetry::enabled() && std::getenv("HYRULE_TEST_ITEM_MOTION")) {
+            float desired[3] = {item.position.x()+2, item.position.y()+1, item.position.z()};
+            uint64_t body = 0;
+            if (MoveSharedItemBody(item, desired, body)) {
+                item.motionFixtureApplied = true;
+                TestTelemetry::emit("item_motion_fixture", -1, [&](auto &w) {
+                    w.Key("id"); w.String(item.id.c_str());
+                    TestTelemetry::position(w, item.position, "before");
+                    TestTelemetry::position(w, Vec3f(desired), "requested");
+                }, true);
+            }
+        }
+        // The peer's independent physics may drift even after the owner has
+        // stopped moving. Keep correcting the replica against the latest pose,
+        // including revision zero, rather than requiring another owner change.
+        if (!item.remote || !item.live || GetTickCount() - item.captured < 100 ||
+            (item.appliedRevision >= item.revision &&
+             GetTickCount() - item.lastPoseApplied < 100)) continue;
+        auto matrix = std::find_if(item.params.begin(), item.params.end(),
+            [](auto &p) { return p.key == "@M"; });
+        if (matrix == item.params.end()) continue;
+        float desired[3];
+        for (unsigned axis = 0; axis < 3; ++axis) {
+            uint32_t bits = 0;
+            for (unsigned k = 0; k < 4; ++k)
+                bits = (bits << 8) | matrix->value[12+16*axis+k];
+            memcpy(&desired[axis], &bits, 4);
+        }
+        uint64_t body = 0;
+        if (!MoveSharedItemBody(item, desired, body)) continue;
+        const bool newRevision = item.appliedRevision < item.revision;
+        item.appliedRevision = item.revision;
+        item.lastPoseApplied = GetTickCount();
+        TestTelemetry::emit("item_pose_applied", int(item.actor), [&](auto &w) {
+            w.Key("id"); w.String(item.id.c_str());
+            w.Key("revision"); w.Uint(item.revision);
+            w.Key("body"); w.Uint64(body);
+            TestTelemetry::position(w, Vec3f(desired));
+        }, newRevision);
+    }
+}
+
 bool setupSharedItem(TransferableData &trns, uint32_t start, uint32_t end) {
     if (!Game::GameInstance->WorldReady.load(std::memory_order_acquire))
         return false;
     std::lock_guard<std::mutex> lock(SharedItems::mutex);
+    ApplySharedItemPositions();
     while (!SharedItems::deleteQueue.empty()) {
         const auto id = SharedItems::deleteQueue.front();
         SharedItems::deleteQueue.pop_front();
@@ -308,13 +446,32 @@ bool setupSharedItem(TransferableData &trns, uint32_t start, uint32_t end) {
         return false;
     const auto id = SharedItems::spawnQueue.front();
     auto it = SharedItems::items.find(id);
-    if (it == SharedItems::items.end() || it->second.removed) {
+    if (it == SharedItems::items.end() || it->second.removed || it->second.actor) {
         SharedItems::spawnQueue.pop_front();
         return false;
     }
     auto &item = it->second;
     if (item.map != SharedItems::localMap ||
         (item.map != "MainField" && item.section != SharedItems::localSection)) {
+        SharedItems::spawnQueue.pop_front();
+        SharedItems::spawnQueue.push_back(id);
+        return false;
+    }
+    // Keep distance-unloaded identities pending until their scene and nearby
+    // actor area are active again. Do not continuously respawn far-away drops.
+    auto matrix = std::find_if(item.params.begin(), item.params.end(),
+        [](auto &p) { return p.key == "@M"; });
+    if (matrix == item.params.end()) return false;
+    double distance = 0;
+    for (unsigned axis = 0; axis < 3; ++axis) {
+        uint32_t bits = 0;
+        for (unsigned k = 0; k < 4; ++k)
+            bits = (bits << 8) | matrix->value[12+16*axis+k];
+        float coordinate; memcpy(&coordinate, &bits, 4);
+        const double delta = coordinate - SharedItems::localPosition[axis];
+        distance += delta*delta;
+    }
+    if (distance > 10000) {
         SharedItems::spawnQueue.pop_front();
         SharedItems::spawnQueue.push_back(id);
         return false;

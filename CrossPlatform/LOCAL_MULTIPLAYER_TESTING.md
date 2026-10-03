@@ -43,6 +43,53 @@ session replaces LatestLog and archives the previous session in that profile.
 
 ## Unattended gameplay regression run
 
+Current item synchronization negotiates revisions with the server, preserves the
+creator's durability/modifiers, and corrects peer body positions against the latest
+owner pose. Stationary owners still receive peer drift correction. Position updates
+are bounded to 10 Hz and changes of at least 5 cm; pending identities rotate fairly
+so a moving item cannot block another drop or pickup. Rotation, velocity, and
+ownership transfer are not synchronized yet.
+
+For a separate live position regression, run:
+
+```sh
+python3 scripts/test-local-gameplay.py --inventory-drops --item-motion-fixture
+```
+
+This opts isolated client A into displacing a real dropped wood body by 2 m
+horizontally and 1 m vertically. The checker requires at least 1 m of actual actor
+movement, the corresponding revision applied on B, and one second of fresh,
+persistent peer actor positions within 50 cm of A on the same identity and actor.
+It rejects matching write telemetry without game readback. Do not combine this
+synthetic displacement with `--inventory-pickups`; test natural pickup separately.
+The loading check also rejects equipment published before scripted drops begin.
+
+Add `--material-drop-fixture` to select Materials explicitly and hold/release a
+normal `Item_` inventory material. Its check requires matching peer creation and
+persistent positions for the same published identity. D-pad left crosses inventory
+categories at the grid edge; it must not be used as a grid-clamping shortcut.
+
+The quest fixture now sets both `HatenoMini_CameraBoy_Activated` and its Sensor+
+progress prerequisite. `--quest-fixture-source b` reverses the source/receiver and
+adds a separate prerequisite readback check. Eight missing v208 progress
+dependencies have stable `P` IDs, while the original IDs remain unchanged. DLC
+availability flags are local. Integer discovery reads cover the full 32-bit value;
+these are discovery flags, not general integer quest-stage synchronization.
+Quest reward retry guards still require live dialogue/reward coverage.
+
+Run `20261003-110813` passes all 32 combined checks, including reverse prerequisite
+replication, peer pickups, attachment flags, combined damage, arrows, actor uniqueness,
+and disconnect cleanup. Run `20261003-111749` fails the added material/motion checks
+after incorrect material navigation left Inventory open; its failed report remains
+archived. The fixture now normalizes the inventory category explicitly. The corrected
+`20261003-112435` run passes all 28 checks: its material check observes
+`Item_Enemy_00` on both clients, and the motion checker observes 2.05 m of actual
+movement with sustained peer readback. Reverse quest/prerequisite replication,
+player/arrow synchronization, actor uniqueness, and disconnect cleanup also pass.
+The subsequent native build includes catalogue lookup and disabled-sync reset guards;
+these guards were compile-checked, but those gameplay runs do not exercise them.
+
+
 Use `--one-handed-fixture` with the current Great Plateau baseline to equip its
 one-handed club and shield in both clients. The fixture also checks the NPC sword/shield attachment flags separately from
 received equipment packets: both valid child links must settle on the same actor
